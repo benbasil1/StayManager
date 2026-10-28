@@ -1,0 +1,5 @@
+{
+  "appId": "com.staymanager.app",
+  "appName": "StayManager",
+  "webDir": "dist"
+}

@@ -163,6 +163,22 @@ CREATE TABLE webhook_secrets (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Files (ID photos, payment screenshots). Bytes are kept apart from the other tables so lists stay fast.
+-- (The API also creates this table on first use if it is missing.)
+CREATE TABLE files (
+  id          TEXT PRIMARY KEY,
+  owner_id    TEXT NOT NULL,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  tenant_id   TEXT,
+  name        TEXT NOT NULL DEFAULT '',
+  mime        TEXT NOT NULL,
+  size        INTEGER NOT NULL,
+  data        BLOB NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX idx_files_property ON files(property_id);
+CREATE INDEX idx_files_owner    ON files(owner_id);
+
 -- Helpful indexes on foreign keys (SQLite does not create these automatically)
 CREATE INDEX idx_rooms_property        ON rooms(property_id);
 CREATE INDEX idx_beds_room             ON beds(room_id);

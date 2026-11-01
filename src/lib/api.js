@@ -66,6 +66,44 @@ export const loadSampleData = () => call('POST', '/seed')
 
 export const sendFeedback = ({ kind, message }) => call('POST', '/feedback', { kind, message })
 
+// ----- files (ID photos, payment screenshots) stored in Turso -----
+const fileId = (path) => path.replace(/^turso:/, '') // "turso:<id>.jpg" -> "<id>.jpg"
+
+export async function uploadFile(tenantId, blob, name = 'file') {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  let res
+  try {
+    res = await fetch(`${BASE}/api/files?tenant_id=${encodeURIComponent(tenantId)}&name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'content-type': blob.type || 'application/octet-stream', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: blob,
+    })
+  } catch {
+    throw new Error('Could not reach the server. Check your internet connection.')
+  }
+  let payload = null
+  try { payload = await res.json() } catch { /* empty body */ }
+  if (!res.ok) throw new Error(payload?.error || `Upload failed (${res.status})`)
+  return payload.path // saved on the tenant / payment
+}
+
+// Returns a temporary local link (blob:) that works in <img src> and window.open
+export async function downloadFileUrl(path) {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  let res
+  try {
+    res = await fetch(`${BASE}/api/files/${encodeURIComponent(fileId(path))}`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+  } catch {
+    throw new Error('Could not reach the server. Check your internet connection.')
+  }
+  if (!res.ok) throw new Error(res.status === 404 ? 'This file was not found.' : `Could not open the file (${res.status})`)
+  return URL.createObjectURL(await res.blob())
+}
+
+export const deleteFile = (path) => call('DELETE', `/files/${encodeURIComponent(fileId(path))}`)
+
 // ----- roles & attenders (staff) -----
 export const myRole = () => call('GET', '/role')
 export const loadStaffData = () => call('GET', '/staff/load')

@@ -49,6 +49,13 @@ const COMPLAINT_COLS = ['property_id', 'tenant_name', 'message', 'category', 'pr
 
 const uuid = () => crypto.randomUUID()
 
+// ───────────── file storage limits (ID photos, payment screenshots) ─────────────
+// The app shrinks photos to ~300-500 KB before uploading, so these are generous ceilings.
+const MAX_IMAGE_BYTES = 1024 * 1024 // 1 MB
+const MAX_PDF_BYTES = 1536 * 1024 // 1.5 MB
+const FILE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' }
+const DEFAULT_QUOTA_MB = 200 // per owner; change with the FILE_QUOTA_MB variable
+
 // ───────────── small database helpers ─────────────
 function toObjects(result) {
   return result.rows.map((row) => Object.fromEntries(result.columns.map((c, i) => [c, row[i]])))
@@ -272,8 +279,102 @@ async function seedDemo(db, user) {
   return pid
 }
 
+// ───────────── files ─────────────
+// Bytes live in their own table, so loading tenants / payments never pulls file data.
+let filesReady = false
+async function ensureFilesTable(db) {
+  if (filesReady) return
+  await db.batch(
+    [
+      `CREATE TABLE IF NOT EXISTS files (
+         id          TEXT PRIMARY KEY,
+         owner_id    TEXT NOT NULL,
+         property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+         tenant_id   TEXT,
+         name        TEXT NOT NULL DEFAULT '',
+         mime        TEXT NOT NULL,
+         size        INTEGER NOT NULL,
+         data        BLOB NOT NULL,
+         created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       )`,
+      'CREATE INDEX IF NOT EXISTS idx_files_property ON files(property_id)',
+      'CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_id)',
+    ].map((sql) => ({ sql, args: [] })),
+    'write'
+  )
+  filesReady = true
+}
+
+// The first bytes must match the declared type, so nobody can store a web page as "image/jpeg".
+function looksLike(mime, b) {
+  if (mime === 'image/jpeg') return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
+  if (mime === 'image/png') return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
+  if (mime === 'image/webp') return b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+  if (mime === 'application/pdf') return b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46
+  return false
+}
+
+async function uploadFile({ db, user, url, request, body, env }) {
+  const mime = (request.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+  const ext = FILE_TYPES[mime]
+  if (!ext) throw new HttpError(400, 'Only JPG, PNG, WebP photos or PDF files are allowed.')
+  const bytes = body instanceof Uint8Array ? body : new Uint8Array(0)
+  if (!bytes.length) throw new HttpError(400, 'The file is empty.')
+  if (bytes.length > (mime === 'application/pdf' ? MAX_PDF_BYTES : MAX_IMAGE_BYTES)) {
+    throw new HttpError(413, mime === 'application/pdf' ? 'PDF is larger than 1.5 MB. Use a photo instead.' : 'Photo is too large even after shrinking. Try a clearer, simpler photo.')
+  }
+  if (!looksLike(mime, bytes)) throw new HttpError(400, 'This file does not look like a valid ' + ext.toUpperCase() + '.')
+
+  const tenantId = url.searchParams.get('tenant_id')
+  const propertyId = await propertyOfTenant(db, tenantId)
+  await requireOwner(db, user, propertyId)
+  await ensureFilesTable(db)
+
+  const quota = (Number(env.FILE_QUOTA_MB) || DEFAULT_QUOTA_MB) * 1024 * 1024
+  const used = Number((await one(db, 'SELECT COALESCE(SUM(size), 0) AS s FROM files WHERE owner_id = ?', [user.id])).s)
+  if (used + bytes.length > quota) throw new HttpError(413, 'Your file storage is full. Delete some old documents first.')
+
+  const id = uuid()
+  const name = String(url.searchParams.get('name') || 'file').slice(0, 120)
+  await db.execute({
+    sql: 'INSERT INTO files (id, owner_id, property_id, tenant_id, name, mime, size, data) VALUES (?,?,?,?,?,?,?,?)',
+    args: [id, user.id, propertyId, tenantId, name, mime, bytes.length, bytes],
+  })
+  return { id, path: `turso:${id}.${ext}`, size: bytes.length }
+}
+
+const fileIdOf = (s) => {
+  const id = String(s || '').replace(/\.[a-z0-9]{2,5}$/i, '')
+  return /^[0-9a-f-]{36}$/i.test(id) ? id : null
+}
+
+async function downloadFile(db, user, rawId) {
+  const id = fileIdOf(rawId)
+  await ensureFilesTable(db)
+  const row = id && (await one(db, 'SELECT f.mime, f.data FROM files f JOIN properties p ON p.id = f.property_id WHERE f.id = ? AND p.owner_id = ?', [id, user.id]))
+  if (!row) throw new HttpError(404, 'File not found')
+  return new Response(row.data, {
+    headers: {
+      'content-type': row.mime,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; sandbox",
+      'content-disposition': 'inline',
+      ...CORS,
+    },
+  })
+}
+
+async function deleteFile(db, user, rawId) {
+  const id = fileIdOf(rawId)
+  if (!id) throw new HttpError(404, 'File not found')
+  await ensureFilesTable(db)
+  await db.execute({ sql: 'DELETE FROM files WHERE id = ? AND property_id IN (SELECT id FROM properties WHERE owner_id = ?)', args: [id, user.id] })
+  return { ok: true }
+}
+
 // ───────────── routing ─────────────
-async function route({ request, db, user, segments, url, body }) {
+async function route({ request, db, user, segments, url, body, env }) {
   const method = request.method
   const [a, b, c] = segments // e.g. ['rooms', '<id>']
 
@@ -435,6 +536,12 @@ async function route({ request, db, user, segments, url, body }) {
     }
   }
 
+  if (a === 'files') {
+    if (!b && method === 'POST') return uploadFile({ db, user, url, request, body, env })
+    if (b && method === 'GET') return downloadFile(db, user, b)
+    if (b && method === 'DELETE') return deleteFile(db, user, b)
+  }
+
   if (a === 'seed' && method === 'POST') return seedDemo(db, user)
 
   throw new HttpError(404, 'Not found')
@@ -501,12 +608,17 @@ export async function handle({ request, db, env = {}, getUser }) {
     const url = new URL(request.url)
     const segments = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean)
     let body
-    if (!['GET', 'DELETE', 'HEAD'].includes(request.method)) {
+    if (segments[0] === 'files' && request.method === 'POST') {
+      // raw file bytes (not JSON); refuse oversized uploads before reading them
+      if (Number(request.headers.get('content-length') || 0) > MAX_PDF_BYTES + 4096) throw new HttpError(413, 'The file is too large.')
+      body = new Uint8Array(await request.arrayBuffer())
+    } else if (!['GET', 'DELETE', 'HEAD'].includes(request.method)) {
       try { body = await request.json() } catch { body = {} }
     }
     if (segments[0] === 'voice') return json(await voiceRoute({ request, db, env, segments, body }))
     const user = await getUser(request, env)
-    return json(await route({ request, db, user, segments, url, body }))
+    const out = await route({ request, db, user, segments, url, body, env })
+    return out instanceof Response ? out : json(out)
   } catch (e) {
     if (e instanceof HttpError) return json(e.code ? { error: e.message, code: e.code } : { error: e.message }, e.status)
     const msg = String(e?.message || e)

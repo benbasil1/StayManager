@@ -1,7 +1,8 @@
 # StayManager on Turso: setup
 
-Login still uses Supabase Auth, and ID photos / payment screenshots still use Supabase Storage.
-Everything else (PGs, rooms, beds, tenants, payments, complaints, calls, attenders) is now in Turso.
+Supabase is now used for **login only** (sign up / sign in / password change).
+Everything else is in Turso: PGs, rooms, beds, tenants, payments, complaints, calls, attenders,
+and the files (ID photos and payment screenshots).
 
     Browser / app  ->  /api/... (Cloudflare Pages Function)  ->  Turso
                           checks the Supabase login, and only ever
@@ -50,10 +51,19 @@ Anything else the agent did with Supabase (checking free beds, bookings, visits)
 ## 6. Check it works
 1. Sign in, create a PG, add a room, a tenant, record a payment. Refresh: the data is still there.
 2. Sign in as a second owner: they must see none of the first owner's data.
-3. Add a payment with a screenshot, then View it (files still come from Supabase Storage).
+3. Add a payment with a screenshot, add an ID photo to a tenant, then View both.
 4. New calls and complaints appear within about 15 seconds (no realtime on Turso).
 
+## Files (ID photos, payment screenshots) in Turso
+- Photos are shrunk on the phone/computer before upload (longest side 1600 px, JPEG), usually 100-500 KB each.
+- PDFs are stored as they are and must be 1.5 MB or smaller. Photos must end up under 1 MB after shrinking.
+- File bytes live in their own `files` table (created automatically on first upload), so lists and
+  dashboards never download them. Each file is only served to the owner of that PG.
+- Each owner has a storage cap of 200 MB. Change it with a Cloudflare variable `FILE_QUOTA_MB` (optional).
+- Files uploaded earlier to Supabase Storage still open and delete as before. New uploads go to Turso.
+- In demo mode, photos stay in the browser only.
+
 ## Notes
-- Do not delete the Supabase project: it still handles logins and file storage.
+- Do not delete the Supabase project: it still handles logins (and holds any older uploaded files).
 - Dates and times are stored as text; timestamps are UTC (ends in Z).
 - Revoke and recreate the Turso token if it is ever shared by mistake: `turso db tokens invalidate <db>`.

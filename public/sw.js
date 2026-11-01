@@ -1,5 +1,5 @@
 // Minimal service worker: makes the site installable and keeps the app shell available offline.
-const CACHE = 'staymanager-v1'
+const CACHE = 'staymanager-v2'
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', (e) => {
@@ -17,8 +17,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request
   const url = new URL(req.url)
-  // Never touch API calls (Supabase) or non-GET requests
-  if (req.method !== 'GET' || url.origin !== self.location.origin) return
+  // Never touch API calls (private tenant data must never be cached) or non-GET requests
+  if (req.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return
   // Network first, fall back to cache so the app still opens offline
   e.respondWith(
     fetch(req)

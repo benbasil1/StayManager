@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { isSupabaseConfigured, supabase } from './supabase'
+import { isSupabaseConfigured } from './supabase'
 import * as api from './api'
 import { buildDemoDb } from './demoData'
 import { computeStats, rentSummary, todayStr, uid } from './utils'
@@ -44,8 +44,8 @@ export function DataProvider({ children }) {
     if (demo) localStorage.setItem(DEMO_KEY, JSON.stringify(db))
   }, [demo, db])
 
-  // ---- load everything from Supabase ----
-  const reload = useCallback(async () => {
+  // ---- load everything from the server (silent = background refresh, no error banner) ----
+  const reload = useCallback(async (silent = false) => {
     if (demo) return
     try {
       const properties = await api.loadProperties()
@@ -57,7 +57,7 @@ export function DataProvider({ children }) {
       setDb({ properties, ...data })
       if (pid !== propertyId) setPropertyId(pid)
     } catch (e) {
-      setError(e.message || 'Could not load data from Supabase')
+      if (silent !== true) setError(e.message || 'Could not load data from the server')
     } finally {
       setLoading(false)
     }
@@ -67,18 +67,15 @@ export function DataProvider({ children }) {
     reload()
   }, [reload])
 
-  // ---- realtime: new calls / complaints / payments appear instantly ----
+  // ---- new calls / complaints appear within 15 seconds (Turso has no realtime, so we check regularly) ----
   useEffect(() => {
     if (demo || !propertyId) return
-    const filter = `property_id=eq.${propertyId}`
-    const channel = supabase
-      .channel('pg-' + propertyId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'calls', filter }, () => reload())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints', filter }, () => reload())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tenants', filter }, () => reload())
-      .subscribe()
+    const tick = () => { if (document.visibilityState === 'visible') reload(true) }
+    const timer = setInterval(tick, 15000)
+    document.addEventListener('visibilitychange', tick) // refresh right away when the app comes back to the front
     return () => {
-      supabase.removeChannel(channel)
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', tick)
     }
   }, [demo, propertyId, reload])
 

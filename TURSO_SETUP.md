@@ -1,11 +1,11 @@
 # StayManager on Turso: setup
 
-Supabase is now used for **login only** (sign up / sign in / password change).
-Everything else is in Turso: PGs, rooms, beds, tenants, payments, complaints, calls, attenders,
-and the files (ID photos and payment screenshots).
+Everything is in Turso, including **login** (sign up / sign in / password change): PGs, rooms, beds,
+tenants, payments, complaints, calls, attenders, users, and the files (ID photos and payment screenshots).
+Supabase is no longer used.
 
     Browser / app  ->  /api/... (Cloudflare Pages Function)  ->  Turso
-                          checks the Supabase login, and only ever
+                          checks the login token, and only ever
                           returns rows from the signed-in owner's own PGs
 
 ## 1. Create the Turso database
@@ -23,11 +23,15 @@ and the files (ID photos and payment screenshots).
 | `TURSO_TOKEN` | the Turso token | **Secret** |
 | `VOICE_API_KEY` | a long random string (only if the voice agent writes data) | **Secret** |
 
-`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are already there; the API reuses them to check logins.
+| `AUTH_SECRET` | a long random string, 32+ characters (signs login tokens) | **Secret** |
+
+Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+Keep it the same forever: changing it signs everyone out. You can delete `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+The `users` table is created automatically the first time someone signs up.
 Then redeploy (Deployments > Retry, or push a commit).
 
 ## 3. Put these files in the repo and push
-`functions/api/[[path]].js`, `server/handler.js`, `src/lib/api.js`, `src/lib/store.jsx`, `public/sw.js`,
+`functions/api/[[path]].js`, `server/handler.js`, `server/auth.js`, `server/errors.js`, `src/lib/supabase.js`, `src/lib/api.js`, `src/lib/store.jsx`, `public/sw.js`,
 `.env.example`, `turso/` (migration tools). `@libsql/client` is already in package.json.
 
 ## 4. Android / iOS app
@@ -60,10 +64,13 @@ Anything else the agent did with Supabase (checking free beds, bookings, visits)
 - File bytes live in their own `files` table (created automatically on first upload), so lists and
   dashboards never download them. Each file is only served to the owner of that PG.
 - Each owner has a storage cap of 200 MB. Change it with a Cloudflare variable `FILE_QUOTA_MB` (optional).
-- Files uploaded earlier to Supabase Storage still open and delete as before. New uploads go to Turso.
 - In demo mode, photos stay in the browser only.
 
 ## Notes
-- Do not delete the Supabase project: it still handles logins (and holds any older uploaded files).
+- The Supabase project is no longer needed. Files uploaded earlier to Supabase Storage can't be opened any more.
+- Existing Supabase users are not copied over. Sign up again, then run `turso/relink_owner.sql` to attach old data.
+- No "forgot password" email yet. Reset by hand: `node turso/reset_password.mjs <email> <new password>`.
+- Wrong passwords are limited to 8 tries per email per 15 minutes.
+- Demo mode (browser-only data) now needs `VITE_DEMO_MODE=true` in `.env.local`.
 - Dates and times are stored as text; timestamps are UTC (ends in Z).
 - Revoke and recreate the Turso token if it is ever shared by mistake: `turso db tokens invalidate <db>`.

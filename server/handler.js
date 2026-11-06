@@ -1,8 +1,11 @@
 // StayManager API: runs on Cloudflare Pages Functions and talks to Turso.
-// Every request is authenticated with the user's Supabase login token, and EVERY query is scoped
+// Every request is authenticated with the user's login token (see auth.js, stored in Turso), and EVERY query is scoped
 // to the properties that user owns (or, for attenders, is staff at). This replaces Supabase RLS.
 //
 // handle({ request, db, env, getUser }) -> Response   (db = a @libsql/client client)
+
+import { HttpError } from './errors.js'
+import { authRoute, getUser as verifyLogin } from './auth.js'
 
 const CORS = {
   'access-control-allow-origin': '*', // safe: auth uses a Bearer token, never cookies
@@ -11,13 +14,7 @@ const CORS = {
   'access-control-max-age': '86400',
 }
 
-export class HttpError extends Error {
-  constructor(status, message, code) {
-    super(message)
-    this.status = status
-    this.code = code
-  }
-}
+export { HttpError }
 const FORBIDDEN = () => new HttpError(403, 'Not allowed')
 
 const json = (data, status = 200) =>
@@ -616,6 +613,7 @@ export async function handle({ request, db, env = {}, getUser }) {
       try { body = await request.json() } catch { body = {} }
     }
     if (segments[0] === 'voice') return json(await voiceRoute({ request, db, env, segments, body }))
+    if (segments[0] === 'auth') return json(await authRoute({ request, db, env, segments, body }))
     const user = await getUser(request, env)
     const out = await route({ request, db, user, segments, url, body, env })
     return out instanceof Response ? out : json(out)
@@ -629,23 +627,7 @@ export async function handle({ request, db, env = {}, getUser }) {
   }
 }
 
-// ───────────── Supabase login check ─────────────
-const tokenCache = new Map()
-export async function getSupabaseUser(request, env, fetchImpl = fetch) {
-  const header = request.headers.get('authorization') || ''
-  const token = header.startsWith('Bearer ') ? header.slice(7) : ''
-  if (!token) throw new HttpError(401, 'Not signed in')
-  const hit = tokenCache.get(token)
-  if (hit && hit.exp > Date.now()) return hit.user
-  const base = env.SUPABASE_URL || env.VITE_SUPABASE_URL
-  const key = env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY
-  if (!base || !key) throw new HttpError(500, 'Server is missing the Supabase settings')
-  const res = await fetchImpl(`${base}/auth/v1/user`, { headers: { authorization: `Bearer ${token}`, apikey: key } })
-  if (!res.ok) throw new HttpError(401, 'Session expired. Please sign in again.')
-  const u = await res.json()
-  if (!u?.id) throw new HttpError(401, 'Session expired. Please sign in again.')
-  const user = { id: u.id, email: String(u.email || '').toLowerCase() }
-  if (tokenCache.size > 500) tokenCache.clear()
-  tokenCache.set(token, { user, exp: Date.now() + 60_000 })
-  return user
-}
+// ───────────── login check ─────────────
+// Kept under the old name too, so functions/api/[[path]].js keeps working without any edit.
+export const getUser = verifyLogin
+export const getSupabaseUser = verifyLogin

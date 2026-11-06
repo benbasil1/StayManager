@@ -1,5 +1,5 @@
 // All database reads/writes go through the StayManager API (Cloudflare Pages Functions -> Turso).
-// Login still uses Supabase Auth: every request carries the user's login token.
+// Login is also stored in Turso (see supabase.js): every request carries the user's login token.
 import { supabase } from './supabase'
 import { ymd } from './utils'
 
@@ -22,6 +22,7 @@ async function call(method, path, body) {
   let payload = null
   try { payload = await res.json() } catch { /* empty body */ }
   if (!res.ok) {
+    if (res.status === 401 && token) await supabase.auth.signOut() // expired or invalid login: go back to the sign-in screen
     const err = new Error(payload?.error || `Request failed (${res.status})`)
     if (payload?.code) err.code = payload.code
     throw err

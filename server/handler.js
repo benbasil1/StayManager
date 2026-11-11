@@ -5,7 +5,7 @@
 // handle({ request, db, env, getUser }) -> Response   (db = a @libsql/client client)
 
 import { HttpError } from './errors.js'
-import { authRoute, getUser as verifyLogin } from './auth.js'
+import { authRoute, getUser as verifyLogin, createLogin, findLogin, loginExists, setLoginPassword, deleteLogin } from './auth.js'
 
 const CORS = {
   'access-control-allow-origin': '*', // safe: auth uses a Bearer token, never cookies
@@ -167,20 +167,34 @@ async function loadPropertyData(db, user, propertyId) {
 }
 
 async function role(db, user) {
+  if (!(await loginExists(db, user.id))) throw new HttpError(401, 'This account no longer exists. Please sign in again.')
   if (await one(db, 'SELECT 1 AS ok FROM properties WHERE owner_id = ? LIMIT 1', [user.id])) return 'owner'
   if (user.email && (await one(db, 'SELECT 1 AS ok FROM property_staff WHERE lower(email) = ? LIMIT 1', [user.email]))) return 'staff'
   return 'owner'
 }
 
+// Attenders (and removed attenders) must never be able to start their own PG and turn into owners.
+async function requireCanOwn(db, user) {
+  if (!(await loginExists(db, user.id))) throw new HttpError(401, 'This account no longer exists. Please sign in again.')
+  const ownsOne = await one(db, 'SELECT 1 AS ok FROM properties WHERE owner_id = ? LIMIT 1', [user.id])
+  if (!ownsOne && user.email && (await one(db, 'SELECT 1 AS ok FROM property_staff WHERE lower(email) = ? LIMIT 1', [user.email]))) throw FORBIDDEN()
+}
+
 async function staffLoad(db, user) {
-  if (!user.email) return { properties: [], complaints: [], contacts: [] }
+  if (!user.email) return { properties: [], complaints: [], calls: [], contacts: [] }
   const mine = `SELECT DISTINCT p.id FROM properties p JOIN property_staff s ON s.property_id = p.id WHERE lower(s.email) = ?`
-  const [properties, complaints, contacts] = await Promise.all([
+  const [properties, complaints, calls, contacts] = await Promise.all([
     all(db, `SELECT DISTINCT p.id, p.name FROM properties p JOIN property_staff s ON s.property_id = p.id WHERE lower(s.email) = ? ORDER BY p.name`, [user.email]),
     all(
       db,
       `SELECT id, property_id, tenant_name, message, category, priority, kind, status, created_at, caller_phone
          FROM complaints WHERE property_id IN (${mine}) ORDER BY created_at DESC LIMIT 300`,
+      [user.email]
+    ),
+    all(
+      db,
+      `SELECT id, property_id, caller_name, caller_phone, summary, intent, sentiment, duration_seconds, created_at, needs_follow_up
+         FROM calls WHERE property_id IN (${mine}) ORDER BY created_at DESC LIMIT 200`,
       [user.email]
     ),
     all(
@@ -191,7 +205,7 @@ async function staffLoad(db, user) {
       [user.email]
     ),
   ])
-  return { properties, complaints, contacts }
+  return { properties, complaints, calls: calls.map(fixCalls), contacts }
 }
 
 // "Load sample data" button
@@ -380,6 +394,7 @@ async function route({ request, db, user, segments, url, body, env }) {
   if (a === 'properties') {
     if (!b && method === 'GET') return loadProperties(db, user)
     if (!b && method === 'POST') {
+      await requireCanOwn(db, user)
       const name = String(body?.name || '').trim()
       if (!name) throw new HttpError(400, 'Name is required')
       const id = body.id || uuid()
@@ -520,15 +535,47 @@ async function route({ request, db, user, segments, url, body, env }) {
       s.id ||= uuid()
       s.email = String(s.email || '').trim().toLowerCase()
       if (!s.email) throw new HttpError(400, 'Email is required')
+      if (s.email === user.email) throw new HttpError(400, 'That is your own email. Use a different email for the attender.')
       if (await one(db, 'SELECT 1 AS ok FROM property_staff WHERE property_id = ? AND lower(email) = ?', [s.property_id, s.email])) {
         throw new HttpError(409, 'This email is already added.', '23505')
+      }
+      // The owner creates the attender's login (email + password). An email that already has a login can only be
+      // reused if it is an attender already, so an owner can never take over somebody else's account.
+      const existing = await findLogin(db, s.email)
+      if (existing) {
+        const isOwner = await one(db, 'SELECT 1 AS ok FROM properties WHERE owner_id = ? LIMIT 1', [existing.id])
+        const isStaff = await one(db, 'SELECT 1 AS ok FROM property_staff WHERE lower(email) = ? LIMIT 1', [s.email])
+        if (isOwner || !isStaff) throw new HttpError(409, 'This email already has an account. Use a different email for the attender.')
+      } else {
+        await createLogin(db, s.email, body?.password)
       }
       await db.execute(insertStmt('property_staff', s))
       return one(db, 'SELECT * FROM property_staff WHERE id = ?', [s.id])
     }
+    // owner sets a new password for an attender
+    if (b && method === 'PATCH') {
+      await requireOwnerOfRow(db, user, 'property_staff', b)
+      const st = await one(db, 'SELECT email FROM property_staff WHERE id = ?', [b])
+      const elsewhere = await one(
+        db,
+        'SELECT 1 AS ok FROM property_staff s JOIN properties p ON p.id = s.property_id WHERE lower(s.email) = lower(?) AND p.owner_id <> ? LIMIT 1',
+        [st.email, user.id]
+      )
+      if (elsewhere) throw new HttpError(409, 'This attender also works for another owner, so only they can change this password.')
+      await setLoginPassword(db, st.email, body?.password)
+      return { ok: true }
+    }
     if (b && method === 'DELETE') {
       await requireOwnerOfRow(db, user, 'property_staff', b)
+      const st = await one(db, 'SELECT email FROM property_staff WHERE id = ?', [b])
       await db.execute({ sql: 'DELETE FROM property_staff WHERE id = ?', args: [b] })
+      // no longer an attender anywhere (and not an owner): delete the login too, so the account stops working
+      if (st) {
+        const login = await findLogin(db, st.email)
+        const stillStaff = await one(db, 'SELECT 1 AS ok FROM property_staff WHERE lower(email) = lower(?) LIMIT 1', [st.email])
+        const isOwner = login && (await one(db, 'SELECT 1 AS ok FROM properties WHERE owner_id = ? LIMIT 1', [login.id]))
+        if (login && !stillStaff && !isOwner) await deleteLogin(db, st.email)
+      }
       return { ok: true }
     }
   }
@@ -539,7 +586,10 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (b && method === 'DELETE') return deleteFile(db, user, b)
   }
 
-  if (a === 'seed' && method === 'POST') return seedDemo(db, user)
+  if (a === 'seed' && method === 'POST') {
+    await requireCanOwn(db, user)
+    return seedDemo(db, user)
+  }
 
   throw new HttpError(404, 'Not found')
 }

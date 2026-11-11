@@ -141,3 +141,31 @@ export async function authRoute({ request, db, env, segments, body }) {
   }
   throw new HttpError(404, 'Not found')
 }
+
+// ───────────── used by the owner's "Add attender" screen (server/handler.js) ─────────────
+export async function findLogin(db, email) {
+  await ensureTables(db)
+  return rowOf(db, 'SELECT id, email FROM users WHERE email = ?', [cleanEmail(email)])
+}
+export async function loginExists(db, id) {
+  await ensureTables(db)
+  return !!(await rowOf(db, 'SELECT 1 AS ok FROM users WHERE id = ?', [id]))
+}
+export async function createLogin(db, email, password) {
+  await ensureTables(db)
+  email = cleanEmail(email)
+  checkEmail(email)
+  checkPassword(password)
+  const id = crypto.randomUUID()
+  await db.execute({ sql: 'INSERT INTO users (id, email, password_hash) VALUES (?,?,?)', args: [id, email, await hashPassword(password)] })
+  return id
+}
+export async function setLoginPassword(db, email, password) {
+  await ensureTables(db)
+  checkPassword(password)
+  await db.execute({ sql: 'UPDATE users SET password_hash = ? WHERE email = ?', args: [await hashPassword(password), cleanEmail(email)] })
+}
+export async function deleteLogin(db, email) {
+  await ensureTables(db)
+  await db.execute({ sql: 'DELETE FROM users WHERE email = ?', args: [cleanEmail(email)] })
+}

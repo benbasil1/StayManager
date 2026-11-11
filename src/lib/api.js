@@ -112,3 +112,4 @@ export const staffSetComplaintStatus = (id, status) => call('PATCH', `/staff/com
 export const loadStaff = (propertyId) => call('GET', `/staff?property_id=${encodeURIComponent(propertyId)}`)
 export const addStaff = (row) => call('POST', '/staff', row)
 export const removeStaff = (id) => call('DELETE', `/staff/${id}`)
+export const resetStaffPassword = (id, password) => call('PATCH', `/staff/${id}`, { password })

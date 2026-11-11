@@ -1,15 +1,15 @@
-// Attender (staff) view: complaints + tenant contact info only. No rent, payments or ID proofs.
+// Attender (staff) view: Complaints and Calls tabs only, each with Call / WhatsApp buttons. No rent, payments or ID proofs.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Icon from './Icon'
 import Toasts from './Toasts'
 import * as api from '../lib/api'
 import { useInboxAlerts } from '../lib/notify'
-import { fmtDate, kindLabel, statusLabel, waLink } from '../lib/utils'
+import { fmtDate, fmtDateTime, fmtDuration, intentLabel, kindLabel, statusLabel, waLink } from '../lib/utils'
 
 const FILTERS = ['all', 'open', 'in_progress', 'resolved']
 const TABS = [
   { id: 'complaints', label: 'Complaints', icon: 'inbox' },
-  { id: 'contacts', label: 'Contacts', icon: 'phone' },
+  { id: 'calls', label: 'Calls', icon: 'phone' },
 ]
 const PROPERTY_KEY = 'sm_staff_property'
 const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10)
@@ -83,43 +83,36 @@ function Complaints({ complaints, contacts, setStatus }) {
   )
 }
 
-function Contacts({ contacts }) {
-  const [q, setQ] = useState('')
-  const list = useMemo(() => {
-    const t = q.trim().toLowerCase()
-    return [...contacts]
-      .filter((x) => !t || `${x.name} ${x.room_no} ${x.phone}`.toLowerCase().includes(t))
-      .sort((a, b) => String(a.room_no).localeCompare(String(b.room_no), undefined, { numeric: true }) || a.name.localeCompare(b.name))
-  }, [contacts, q])
+function Calls({ calls, contacts }) {
+  const [openId, setOpenId] = useState(null)
+  const dot = { green: 'dot-green', orange: 'dot-orange', red: 'dot-red' }
   return (
-    <>
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search name, room or number"
-        aria-label="Search contacts"
-        style={{ width: '100%', padding: '12px 16px', borderRadius: 14, border: '1px solid var(--line)', background: 'var(--card)', color: 'inherit', font: 'inherit', marginBottom: 8 }}
-      />
-      <div className="list">
-        {list.length === 0 && <div className="empty">{contacts.length ? 'No match.' : 'No tenants to show yet.'}</div>}
-        {list.map((t) => (
-          <div className="item" key={t.id}>
-            <div className="item-top">
-              <strong>{t.name}</strong>
-              <span className="tag">Room {t.room_no}</span>
+    <div className="list">
+      {calls.length === 0 && <div className="empty">No calls yet. Calls handled by the AI voice agent show up here.</div>}
+      {calls.map((c) => {
+        // number saved with the call; if none, use the tenant with the same name
+        const contact = findContact({ tenant_name: c.caller_name, caller_phone: c.caller_phone, message: c.summary }, contacts)
+        const phone = c.caller_phone || (contact && contact.phone) || ''
+        return (
+          <div className="item" key={c.id}>
+            <div className="item-top" role="button" tabIndex={0} style={{ cursor: 'pointer' }} onClick={() => setOpenId(openId === c.id ? null : c.id)}>
+              <span className={'dot ' + (dot[c.sentiment] || 'dot-green')} />
+              <strong>{c.caller_name}</strong>
+              <span className="tag">{intentLabel[c.intent] || c.intent}</span>
             </div>
-            <p className="meta">{t.bed_label} • {t.phone}</p>
-            <ContactButtons phone={t.phone} whatsapp={t.whatsapp} />
+            <p className={openId === c.id ? '' : 'clamp2'}>{c.summary}</p>
+            <p className="meta">{phone ? phone + ' • ' : ''}{fmtDuration(c.duration_seconds)} • {fmtDateTime(c.created_at)}</p>
+            <ContactButtons phone={phone} whatsapp={(contact && contact.whatsapp) || phone} />
           </div>
-        ))}
-      </div>
-    </>
+        )
+      })}
+    </div>
   )
 }
 
 export default function StaffApp({ auth }) {
   const [tab, setTab] = useState('complaints')
-  const [data, setData] = useState({ properties: [], complaints: [], contacts: [] })
+  const [data, setData] = useState({ properties: [], complaints: [], calls: [], contacts: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [pid, setPid] = useState(() => { try { return localStorage.getItem(PROPERTY_KEY) } catch { return null } })
@@ -146,8 +139,9 @@ export default function StaffApp({ auth }) {
   const propertyId = data.properties.some((p) => p.id === pid) ? pid : (data.properties[0] && data.properties[0].id) || null
   const property = data.properties.find((p) => p.id === propertyId) || null
   const complaints = useMemo(() => data.complaints.filter((c) => c.property_id === propertyId), [data.complaints, propertyId])
+  const calls = useMemo(() => (data.calls || []).filter((c) => c.property_id === propertyId), [data.calls, propertyId])
   const contacts = useMemo(() => data.contacts.filter((t) => t.property_id === propertyId), [data.contacts, propertyId])
-  const { toasts, dismiss, unread } = useInboxAlerts({ loading, propertyId, calls: [], complaints }, tab === 'complaints')
+  const { toasts, dismiss, unread } = useInboxAlerts({ loading, propertyId, calls, complaints }, tab === 'complaints' || tab === 'calls')
 
   const selectProperty = (id) => { setPid(id); try { localStorage.setItem(PROPERTY_KEY, id) } catch { /* ignore */ } }
 
@@ -202,17 +196,17 @@ export default function StaffApp({ auth }) {
         {error && <div className="notice err" onClick={() => setError('')}>{error} <span className="muted">(tap to dismiss)</span></div>}
 
         <div className="content">
-          {!property && <div className="empty">You have not been added to a PG yet. Ask the owner to add your email.</div>}
+          {!property && <div className="empty">You have not been added to a PG yet. Ask the owner to add you.</div>}
           {property && tab === 'complaints' && (
             <div className="inbox-page">
               <h2 className="page-title">Complaints</h2>
               <Complaints complaints={complaints} contacts={contacts} setStatus={setStatus} />
             </div>
           )}
-          {property && tab === 'contacts' && (
+          {property && tab === 'calls' && (
             <div className="inbox-page">
-              <h2 className="page-title">Contacts</h2>
-              <Contacts contacts={contacts} />
+              <h2 className="page-title">Calls</h2>
+              <Calls calls={calls} contacts={contacts} />
             </div>
           )}
         </div>

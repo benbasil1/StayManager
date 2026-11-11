@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { isSupabaseConfigured } from './supabase'
 import * as api from './api'
 import { buildDemoDb } from './demoData'
-import { computeStats, rentSummary, todayStr, uid } from './utils'
+import { computeStats, rentSummary, reportUrl, todayStr, uid, waLink, welcomeText } from './utils'
 import { addIdDoc, removeIdDoc } from './idDocs'
 
 const DEMO_KEY = 'sm_demo_db_v2'
@@ -28,6 +28,9 @@ export function DataProvider({ children }) {
   const [propertyId, setPropertyId] = useState(() => localStorage.getItem(PROPERTY_KEY))
   const [loading, setLoading] = useState(!demo)
   const [error, setError] = useState('')
+  const [reportCode, setReportCode] = useState('')
+  const [welcomeId, setWelcomeId] = useState(null) // tenant just added: offer the WhatsApp welcome
+  const [removal, setRemoval] = useState([]) // tenants who left but are still in the WhatsApp group
 
   // ---- keep a valid selected property (demo mode) ----
   useEffect(() => {
@@ -66,6 +69,14 @@ export function DataProvider({ children }) {
   useEffect(() => {
     reload()
   }, [reload])
+
+  // ---- link of the complaint QR page (put in the welcome message) ----
+  useEffect(() => {
+    if (demo || !propertyId) { setReportCode(''); return }
+    let on = true
+    api.getReportCode(propertyId).then((r) => on && setReportCode(r.code)).catch(() => on && setReportCode(''))
+    return () => { on = false }
+  }, [demo, propertyId])
 
   // ---- new calls / complaints appear within 15 seconds (Turso has no realtime, so we check regularly) ----
   useEffect(() => {
@@ -131,6 +142,13 @@ export function DataProvider({ children }) {
     tenants: d.tenants.map((t) => (bedIds.includes(t.bed_id) ? { ...t, bed_id: null, status: 'left' } : t)),
   })
 
+  // tenants who were invited to the WhatsApp group and are about to be moved out: remind the owner to remove them
+  const remindRemoval = (bedIds) => {
+    if (!property?.wa_group_link) return
+    const list = tenants.filter((t) => t.status === 'active' && bedIds.includes(t.bed_id) && t.wa_invited_at)
+    if (list.length) setRemoval(list.map((t) => ({ id: t.id, name: t.name, phone: t.phone })))
+  }
+
   const actions = {
     // ----- beds & rooms -----
     addBed(roomId) {
@@ -141,6 +159,7 @@ export function DataProvider({ children }) {
       mutate(patchRoom(roomId, (r) => ({ ...r, beds: [...r.beds, bed] })), () => api.insertBed(bed))
     },
     deleteBed(roomId, bedId) {
+      remindRemoval([bedId])
       mutate(
         (d) => releaseTenants([bedId])(patchRoom(roomId, (r) => ({ ...r, beds: r.beds.filter((b) => b.id !== bedId) }))(d)),
         () => api.removeBed(bedId)
@@ -154,6 +173,7 @@ export function DataProvider({ children }) {
     },
     deleteRoom(roomId) {
       const bedIds = rooms.find((r) => r.id === roomId)?.beds.map((b) => b.id) || []
+      remindRemoval(bedIds)
       mutate(
         (d) => releaseTenants(bedIds)({ ...d, rooms: d.rooms.filter((r) => r.id !== roomId) }),
         () => api.removeRoom(roomId)
@@ -166,6 +186,7 @@ export function DataProvider({ children }) {
     // ----- tenants -----
     async addTenant(roomId, bedId, form, files = []) {
       const tenant = { id: uid(), property_id: propertyId, bed_id: bedId, status: 'active', ...form }
+      setWelcomeId(tenant.id)
       await mutate(
         (d) => ({ ...setOccupied(roomId, bedId, true)(d), tenants: [...d.tenants, tenant] }),
         async () => {
@@ -191,6 +212,7 @@ export function DataProvider({ children }) {
       )
     },
     vacateTenant(tenant) {
+      remindRemoval([tenant.bed_id])
       const row = rowByBed[tenant.bed_id]
       const patch = { status: 'left', bed_id: null, move_out: todayStr() }
       mutate(
@@ -204,6 +226,33 @@ export function DataProvider({ children }) {
         }
       )
     },
+
+    // ----- WhatsApp group -----
+    welcomeLink(row) {
+      return waLink(
+        row.tenant.whatsapp || row.tenant.phone,
+        welcomeText({ tenant: row.tenant, room: row.room, bed: row.bed, property, groupLink: property?.wa_group_link || '', reportLink: reportCode ? reportUrl(reportCode) : '' })
+      )
+    },
+    markInvited(tenantId) {
+      if (property?.wa_group_link) actions.updateTenant(tenantId, { wa_invited_at: new Date().toISOString() })
+    },
+    async setGroupLink(link) {
+      const value = String(link || '').trim()
+      if (value && !/^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+(\?[^\s]*)?$/.test(value)) {
+        throw new Error('This does not look like a WhatsApp group invite link. It starts with https://chat.whatsapp.com/')
+      }
+      setDb((d) => ({ ...d, properties: d.properties.map((p) => (p.id === propertyId ? { ...p, wa_group_link: value || null } : p)) }))
+      if (demo) return
+      try {
+        await api.setPropertyWaLink(propertyId, value)
+      } catch (e) {
+        reload()
+        throw e
+      }
+    },
+    dismissWelcome: () => setWelcomeId(null),
+    dismissRemoval: () => setRemoval([]),
 
     // ----- payments -----
     async recordPayment(tenantId, form, proofFile) {
@@ -278,7 +327,7 @@ export function DataProvider({ children }) {
 
   const value = {
     demo, loading, error, properties: db.properties, property, propertyId,
-    rooms, complaints, calls, tenants, payments, rowByBed, tenantRows, paymentsFor, stats, ...actions,
+    rooms, complaints, calls, tenants, payments, rowByBed, tenantRows, paymentsFor, stats, welcomeId, removal, ...actions,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

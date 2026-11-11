@@ -199,6 +199,54 @@ function QrCard() {
   )
 }
 
+function GroupCard() {
+  const { property, demo, tenantRows, setGroupLink, welcomeLink, markInvited } = useData()
+  const saved = (property && property.wa_group_link) || ''
+  const [link, setLink] = useState(saved)
+  const [msg, setMsg] = useState({ type: '', text: '' })
+  useEffect(() => { setLink(saved) }, [saved, property && property.id])
+
+  const pending = saved ? tenantRows.filter((r) => !r.tenant.wa_invited_at) : []
+
+  async function save(e) {
+    e.preventDefault()
+    setMsg({ type: '', text: '' })
+    try {
+      await setGroupLink(link)
+      setMsg({ type: 'ok', text: link.trim() ? 'Saved.' : 'Group link removed.' })
+    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not save' }) }
+  }
+
+  return (
+    <>
+      <p className="muted">
+        Create one WhatsApp group for {property ? property.name : 'this PG'} (you are the admin automatically, and you can let only admins send messages).
+        In the group tap the name, then <strong>Invite via link</strong>, copy the link and paste it here. Then every tenant gets a one-tap welcome message with this link.
+      </p>
+      <form className="login-form" style={{ marginTop: 0 }} onSubmit={save}>
+        <label>Group invite link<input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://chat.whatsapp.com/…" autoComplete="off" /></label>
+        {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
+        <button className="btn primary" disabled={link.trim() === saved}>Save link</button>
+      </form>
+      {saved && (
+        <>
+          <h4>{pending.length ? `Not invited yet (${pending.length})` : 'Everyone has been invited'}</h4>
+          <div className="list-plain">
+            {pending.map((r) => (
+              <div key={r.tenant.id} className="set-row pg-row">
+                <div><strong>{r.tenant.name}</strong><p className="muted">Room {r.room.room_no} • {r.bed.label}</p></div>
+                <a className="btn ghost sm" href={welcomeLink(r)} target="_blank" rel="noreferrer" onClick={() => markInvited(r.tenant.id)}>Send invite</a>
+              </div>
+            ))}
+          </div>
+          <p className="muted">When you mark a tenant as moved out, the app reminds you to remove them from the group.</p>
+        </>
+      )}
+      {demo && <p className="muted">Demo mode: the link is saved in this browser only.</p>}
+    </>
+  )
+}
+
 function StaffManager() {
   const { property, demo } = useData()
   const pid = property && property.id
@@ -300,6 +348,11 @@ export default function Settings({ auth }) {
       <section className="card set-card">
         <h3>Complaint QR code</h3>
         <QrCard />
+      </section>
+
+      <section className="card set-card">
+        <h3>PG WhatsApp group</h3>
+        <GroupCard />
       </section>
 
       <section className="card set-card">

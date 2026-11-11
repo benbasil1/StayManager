@@ -13,6 +13,7 @@ import Assistant from './components/Assistant'
 import Settings from './components/Settings'
 import Toasts from './components/Toasts'
 import ReportPage from './components/ReportPage'
+import WhatsAppPrompts from './components/WhatsAppPrompts'
 import { useInboxAlerts } from './lib/notify'
 
 const TABS = [
@@ -133,6 +134,7 @@ function Shell({ auth }) {
       </main>
 
       <Toasts toasts={toasts} onOpen={openInbox} onDismiss={dismiss} />
+      <WhatsAppPrompts />
 
       {/* Mobile bottom nav */}
       <nav className="bottom-nav">

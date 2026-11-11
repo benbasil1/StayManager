@@ -24,7 +24,7 @@ const json = (data, status = 200) =>
   })
 
 // ───────────── column whitelists (the client can never set anything else) ─────────────
-const TENANT_COLS = ['bed_id', 'name', 'phone', 'whatsapp', 'email', 'rent_amount', 'deposit', 'move_in', 'move_out', 'due_day', 'notes', 'id_type', 'id_last4', 'id_doc_paths', 'status', 'leaving_on']
+const TENANT_COLS = ['bed_id', 'name', 'phone', 'whatsapp', 'email', 'rent_amount', 'deposit', 'move_in', 'move_out', 'due_day', 'notes', 'id_type', 'id_last4', 'id_doc_paths', 'status', 'leaving_on', 'wa_invited_at']
 const INSERT_COLS = {
   properties: ['id', 'name'],
   rooms: ['id', 'property_id', 'room_no', 'floor', 'price'],
@@ -135,13 +135,28 @@ async function checkBedInProperty(db, bedId, propertyId) {
   if ((await propertyOfBed(db, bedId)) !== propertyId) throw FORBIDDEN()
 }
 
+// ───────────── WhatsApp group link + "invited" mark (columns are added automatically on first use) ─────────────
+let waReady = false
+async function ensureWaColumns(db) {
+  if (waReady) return
+  for (const sql of ['ALTER TABLE properties ADD COLUMN wa_group_link TEXT', 'ALTER TABLE tenants ADD COLUMN wa_invited_at TEXT']) {
+    try { await db.execute(sql) } catch (e) {
+      if (!/duplicate column/i.test(String(e?.message || e))) throw e
+    }
+  }
+  waReady = true
+}
+const WA_GROUP_RE = /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+(\?[^\s]*)?$/
+
 // ───────────── handlers ─────────────
 async function loadProperties(db, user) {
+  await ensureWaColumns(db)
   return all(db, 'SELECT * FROM properties WHERE owner_id = ? ORDER BY created_at', [user.id])
 }
 
 async function loadPropertyData(db, user, propertyId) {
   await requireOwner(db, user, propertyId)
+  await ensureWaColumns(db)
   const q = (sql) => ({ sql, args: [propertyId] })
   const res = await db.batch(
     [
@@ -491,6 +506,14 @@ async function route({ request, db, user, segments, url, body, env }) {
       return one(db, 'SELECT * FROM properties WHERE id = ?', [id])
     }
     if (b && c === 'data' && method === 'GET') return loadPropertyData(db, user, b)
+    if (b && !c && method === 'PATCH') {
+      await requireOwner(db, user, b)
+      await ensureWaColumns(db)
+      const link = String(body?.wa_group_link || '').trim()
+      if (link && !WA_GROUP_RE.test(link)) throw new HttpError(400, 'This does not look like a WhatsApp group invite link. It starts with https://chat.whatsapp.com/')
+      await db.execute({ sql: 'UPDATE properties SET wa_group_link = ? WHERE id = ?', args: [link || null, b] })
+      return { ok: true }
+    }
     if (b && c === 'qr' && method === 'GET') return getReportCode(db, user, b, false)
     if (b && c === 'qr' && method === 'POST') return getReportCode(db, user, b, true)
   }
@@ -565,6 +588,7 @@ async function route({ request, db, user, segments, url, body, env }) {
       const pid = await propertyOfRow(db, 'tenants', b)
       await requireOwner(db, user, pid)
       const patch = pick(body, PATCH_COLS.tenants)
+      if ('wa_invited_at' in patch) await ensureWaColumns(db)
       if ('bed_id' in patch) await checkBedInProperty(db, patch.bed_id, pid)
       await db.execute(updateStmt('tenants', b, patch))
       return { ok: true }

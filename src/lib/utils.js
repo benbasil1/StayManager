@@ -64,6 +64,20 @@ export function waLink(phone, text) {
   return `https://wa.me/${num}` + (text ? `?text=${encodeURIComponent(text)}` : '')
 }
 
+// Link people open from the QR on the wall (also used in the welcome message)
+export const reportUrl = (code) => `${String(import.meta.env.VITE_PUBLIC_URL || window.location.origin).replace(/\/+$/, '')}/#/report/${code}`
+
+// WhatsApp welcome message sent to a new tenant: welcome, WhatsApp group link, complaint link
+export function welcomeText({ tenant, room, bed, property, groupLink, reportLink }) {
+  const first = String(tenant.name || '').split(' ')[0]
+  const lines = [`Hi ${first}, welcome to ${(property && property.name) || 'our PG'}! 🎉`]
+  if (room) lines.push(`Your room: Room ${room.room_no}${bed ? ', ' + bed.label : ''}.`)
+  if (groupLink) lines.push('', 'Please join our PG WhatsApp group for notices and updates:', groupLink)
+  if (reportLink) lines.push('', 'Any problem in the PG? Report it here anytime (use your phone number and room number):', reportLink)
+  lines.push('', 'Thank you!')
+  return lines.join('\n')
+}
+
 // ---------- rent maths ----------
 // Rent is due every month from the move-in month up to the current month.
 // Payments are applied to the oldest unpaid month first.

@@ -114,6 +114,8 @@ export const addStaff = (row) => call('POST', '/staff', row)
 export const removeStaff = (id) => call('DELETE', `/staff/${id}`)
 export const resetStaffPassword = (id, password) => call('PATCH', `/staff/${id}`, { password })
 
+export const setPropertyWaLink = (propertyId, link) => call('PATCH', `/properties/${propertyId}`, { wa_group_link: link || '' })
+
 // ----- complaint QR -----
 export const getReportCode = (propertyId) => call('GET', `/properties/${propertyId}/qr`)
 export const resetReportCode = (propertyId) => call('POST', `/properties/${propertyId}/qr`)

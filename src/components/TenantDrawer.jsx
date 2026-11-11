@@ -61,7 +61,7 @@ function PaymentForm({ row, onSave, onCancel }) {
 }
 
 export default function TenantDrawer({ row, onClose }) {
-  const { property, paymentsFor, recordPayment, deletePayment, setPaymentProof, updateTenant, vacateTenant } = useData()
+  const { property, paymentsFor, recordPayment, deletePayment, setPaymentProof, updateTenant, vacateTenant, welcomeLink, markInvited } = useData()
   const [view, setView] = useState(null)
   const [proofMsg, setProofMsg] = useState('')
   const proofFileRef = useRef(null)
@@ -157,6 +157,18 @@ export default function TenantDrawer({ row, onClose }) {
             {tenant.email && <div><dt>Email</dt><dd>{tenant.email}</dd></div>}
             {tenant.notes && <div><dt>Notes</dt><dd>{tenant.notes}</dd></div>}
           </dl>
+        </section>
+
+        <section className="t-section">
+          <h4>WhatsApp group</h4>
+          <p className="muted">
+            {property && property.wa_group_link
+              ? (tenant.wa_invited_at ? `Invite sent on ${fmtDay(tenant.wa_invited_at)}.` : 'Not invited to the PG group yet.')
+              : 'Add your PG WhatsApp group link in Settings to invite tenants with one tap.'}
+          </p>
+          <a className="btn ghost sm" href={welcomeLink(row)} target="_blank" rel="noreferrer" onClick={() => markInvited(tenant.id)}>
+            {tenant.wa_invited_at ? 'Send welcome again' : 'Send welcome on WhatsApp'}
+          </a>
         </section>
 
         <IdProof tenant={tenant} />

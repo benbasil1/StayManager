@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import Icon from './Icon'
+import { InfoBtn, InfoPanel } from './InfoTip'
 import { todayStr } from '../lib/utils'
 
 const ID_TYPES = ['Aadhaar', 'PAN', 'Driving licence', 'Voter ID', 'Passport', 'College / Company ID']
@@ -23,6 +24,7 @@ export default function TenantForm({ title, initial, defaultRent, onSave, onClos
   const [files, setFiles] = useState([])
   const fileRef = useRef(null)
   const [err, setErr] = useState('')
+  const [idInfo, setIdInfo] = useState(false)
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }))
 
   const submit = (e) => {
@@ -80,14 +82,17 @@ export default function TenantForm({ title, initial, defaultRent, onSave, onClos
         {!initial && (
           <div className="id-pick">
             <div className="set-row">
-              <strong>ID proof (photo or PDF)</strong>
+              <span className="label-info">
+                <strong>ID proof (photo or PDF)</strong>
+                <InfoBtn open={idInfo} onClick={() => setIdInfo((o) => !o)} label="About ID proof" />
+              </span>
               <button type="button" className="btn ghost sm" onClick={() => fileRef.current.click()}><Icon name="plus" size={16} /> Add</button>
             </div>
             <input
               ref={fileRef} type="file" accept="image/*,application/pdf" multiple hidden
               onChange={(e) => { const picked = Array.from(e.target.files || []); e.target.value = ''; setFiles((p) => [...p, ...picked].slice(0, 4)) }}
             />
-            {files.length === 0 && <p className="muted">Optional. On a phone you can take the photo with the camera. Saved privately with the tenant.</p>}
+            {idInfo && <InfoPanel><p className="muted">Optional. On a phone you can take the photo with the camera. Saved privately with the tenant.</p></InfoPanel>}
             {files.map((file, i) => (
               <div className="id-row" key={file.name + i}>
                 <span className="clamp1">{file.name}</span>

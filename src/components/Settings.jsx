@@ -6,6 +6,7 @@ import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, reset
 import { useData } from '../lib/store'
 import { alertsPref, browserAlertsSupported, setAlertsPref } from '../lib/notify'
 import Icon from './Icon'
+import { SectionHead } from './InfoTip'
 
 const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']]
 const SIZES = [['sm', 'Small'], ['md', 'Default'], ['lg', 'Large'], ['xl', 'Extra large']]
@@ -63,13 +64,20 @@ function AlertsCard() {
   const ask = async () => { try { setPerm(await Notification.requestPermission()) } catch { /* ignore */ } }
   return (
     <>
-      <p className="muted">You get a pop-up and a red count on Inbox when your AI voice agent logs a new call, complaint or request.</p>
+      <SectionHead
+        title="Notifications"
+        info={(
+          <>
+            <p className="muted">You get a pop-up and a red count on Inbox when your AI voice agent logs a new call, complaint or request.</p>
+            <p className="muted">Alerts only arrive while the app is open. Alerts when it is fully closed would need a push service, which is not set up.</p>
+          </>
+        )}
+      />
       <Seg label="Alerts" value={on ? 'on' : 'off'} options={[['on', 'Alerts on'], ['off', 'Alerts off']]} onChange={(v) => toggle(v === 'on')} />
       {perm === 'unsupported' && <p className="muted">This browser cannot show system notifications.</p>}
       {perm === 'default' && <button className="btn ghost" onClick={ask}>Also show system notifications</button>}
       {perm === 'granted' && <p className="muted">System notifications are on. They appear when this app is open in a background tab or window.</p>}
       {perm === 'denied' && <p className="muted">System notifications are blocked in your browser settings for this site.</p>}
-      <p className="muted">Alerts only arrive while the app is open. Alerts when it is fully closed would need a push service, which is not set up.</p>
     </>
   )
 }
@@ -135,6 +143,10 @@ function MyPgs() {
 
   return (
     <>
+      <SectionHead
+        title="My PGs"
+        info={<p className="muted">Each PG has its own rooms, tenants, complaints and calls. Switch between them here or from the name at the top of the page.</p>}
+      />
       <div className="list-plain">
         {data.properties.map((p) => (
           <div key={p.id} className="set-row pg-row">
@@ -149,7 +161,6 @@ function MyPgs() {
         <label>Add another PG<input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sunrise Girls PG" /></label>
         <button className="btn primary" disabled={busy || !name.trim()}><Icon name="plus" size={18} /> {busy ? 'Adding…' : 'Add PG'}</button>
       </form>
-      <p className="muted">Each PG has its own rooms, tenants, complaints and calls. Switch between them here or from the name at the top of the page.</p>
     </>
   )
 }
@@ -174,7 +185,14 @@ function QrCard() {
   }, [pid, demo])
   useEffect(() => { make(false) }, [make])
 
-  if (demo) return <p className="muted">Demo mode has no QR code. Connect your server to use this.</p>
+  if (demo) {
+    return (
+      <>
+        <SectionHead title="Complaint QR code" />
+        <p className="muted">Demo mode has no QR code. Connect your server to use this.</p>
+      </>
+    )
+  }
 
   function print() {
     const w = window.open('', '_blank')
@@ -187,7 +205,10 @@ function QrCard() {
 
   return (
     <>
-      <p className="muted">Stick this QR in the PG. Tenants scan it, enter their phone number and room number, and describe the problem. It is matched to their profile and appears in Complaints for you and your attenders.</p>
+      <SectionHead
+        title="Complaint QR code"
+        info={<p className="muted">Stick this QR in the PG. Tenants scan it, enter their phone number and room number, and describe the problem. It is matched to their profile and appears in Complaints for you and your attenders.</p>}
+      />
       {img && <img src={img} alt="Complaint QR code" style={{ width: 220, height: 220, borderRadius: 12, background: '#fff' }} />}
       {msg && <div className="notice err">{msg}</div>}
       <div className="status-row">
@@ -219,10 +240,18 @@ function GroupCard() {
 
   return (
     <>
-      <p className="muted">
-        Create one WhatsApp group for {property ? property.name : 'this PG'} (you are the admin automatically, and you can let only admins send messages).
-        In the group tap the name, then <strong>Invite via link</strong>, copy the link and paste it here. Then every tenant gets a one-tap welcome message with this link.
-      </p>
+      <SectionHead
+        title="PG WhatsApp group"
+        info={(
+          <>
+            <p className="muted">
+              Create one WhatsApp group for {property ? property.name : 'this PG'} (you are the admin automatically, and you can let only admins send messages).
+              In the group tap the name, then <strong>Invite via link</strong>, copy the link and paste it here. Then every tenant gets a one-tap welcome message with this link.
+            </p>
+            <p className="muted">When you mark a tenant as moved out, the app reminds you to remove them from the group.</p>
+          </>
+        )}
+      />
       <form className="login-form" style={{ marginTop: 0 }} onSubmit={save}>
         <label>Group invite link<input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://chat.whatsapp.com/…" autoComplete="off" /></label>
         {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
@@ -239,7 +268,6 @@ function GroupCard() {
               </div>
             ))}
           </div>
-          <p className="muted">When you mark a tenant as moved out, the app reminds you to remove them from the group.</p>
         </>
       )}
       {demo && <p className="muted">Demo mode: the link is saved in this browser only.</p>}
@@ -263,7 +291,14 @@ function StaffManager() {
   }, [pid, demo])
   useEffect(() => { refresh() }, [refresh])
 
-  if (demo) return <p className="muted">Demo mode has no logins. Connect Supabase to add attenders.</p>
+  if (demo) {
+    return (
+      <>
+        <SectionHead title="Attenders (staff)" />
+        <p className="muted">Demo mode has no logins. Connect Supabase to add attenders.</p>
+      </>
+    )
+  }
 
   async function add(e) {
     e.preventDefault()
@@ -296,7 +331,10 @@ function StaffManager() {
 
   return (
     <>
-      <p className="muted">Attenders get their own login and see only the Complaints and Calls tabs for {property ? property.name : 'this PG'}, with Call and WhatsApp buttons. No rent, payments or ID proofs. They can change a complaint's status and you see it right away.</p>
+      <SectionHead
+        title="Attenders (staff)"
+        info={<p className="muted">Attenders get their own login and see only the Complaints and Calls tabs for {property ? property.name : 'this PG'}, with Call and WhatsApp buttons. No rent, payments or ID proofs. They can change a complaint's status and you see it right away.</p>}
+      />
       <div className="list-plain">
         {list.map((s) => (
           <div key={s.id} className="set-row pg-row">
@@ -327,36 +365,30 @@ export default function Settings({ auth }) {
       <h2 className="page-title">Settings</h2>
 
       <section className="card set-card">
-        <h3>Account</h3>
+        <SectionHead title="Account" info={<p className="muted">Signs you out so you can sign in with a different email.</p>} />
         <div className="set-row">
           <div><p className="muted">Signed in as</p><strong>{auth.session.email}</strong></div>
         </div>
         <button className="btn ghost" onClick={auth.signOut}><Icon name="switch" size={18} /> Switch account</button>
-        <p className="muted">Signs you out so you can sign in with a different email.</p>
       </section>
 
       <section className="card set-card">
-        <h3>My PGs</h3>
         <MyPgs />
       </section>
 
       <section className="card set-card">
-        <h3>Attenders (staff)</h3>
         <StaffManager />
       </section>
 
       <section className="card set-card">
-        <h3>Complaint QR code</h3>
         <QrCard />
       </section>
 
       <section className="card set-card">
-        <h3>PG WhatsApp group</h3>
         <GroupCard />
       </section>
 
       <section className="card set-card">
-        <h3>Notifications</h3>
         <AlertsCard />
       </section>
 

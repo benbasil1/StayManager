@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import Icon from './Icon'
+import { InfoBtn, InfoPanel } from './InfoTip'
 import TenantForm from './TenantForm'
 import IdProof from './IdProof'
 import { useData } from '../lib/store'
@@ -8,6 +9,7 @@ import { daysUntil, fmtDay, fmtMonth, leavingText, rentStatusLabel, rupees, toda
 
 function PaymentForm({ row, onSave, onCancel }) {
   const [proof, setProof] = useState(null)
+  const [proofInfo, setProofInfo] = useState(false)
   const proofRef = useRef(null)
   const { summary, tenant } = row
   const [amount, setAmount] = useState(summary.due > 0 ? summary.due : tenant.rent_amount)
@@ -40,11 +42,14 @@ function PaymentForm({ row, onSave, onCancel }) {
       <label>Note (optional)<input value={note} onChange={(e) => setNote(e.target.value)} /></label>
       <div className="id-pick">
         <div className="set-row">
-          <strong>Payment screenshot</strong>
+          <span className="label-info">
+            <strong>Payment screenshot</strong>
+            <InfoBtn open={proofInfo} onClick={() => setProofInfo((o) => !o)} label="About payment screenshot" />
+          </span>
           <button type="button" className="btn ghost sm" onClick={() => proofRef.current.click()}><Icon name="plus" size={16} /> {proof ? 'Change' : 'Add'}</button>
         </div>
         <input ref={proofRef} type="file" accept="image/*,application/pdf" hidden onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) setProof(f) }} />
-        {!proof && <p className="muted">Optional. Keep the UPI or bank screenshot as a receipt for later.</p>}
+        {proofInfo && <InfoPanel><p className="muted">Optional. Keep the UPI or bank screenshot as a receipt for later.</p></InfoPanel>}
         {proof && (
           <div className="id-row">
             <span className="clamp1">{proof.name}</span>

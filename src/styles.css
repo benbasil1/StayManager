@@ -67,6 +67,14 @@ code { background: var(--tint); padding: 1px 6px; border-radius: 6px; font-size:
 .icon-btn { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: var(--green); flex: none; }
 .icon-btn:hover { background: var(--tint); }
 .icon-btn.danger { color: var(--red); }
+.head-info { display: flex; align-items: center; gap: 8px; }
+.head-info h3 { margin: 0; }
+.info-btn { width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--green); color: var(--green); background: none; display: inline-grid; place-items: center; flex: none; font: italic 700 0.8125rem/1 Georgia, 'Times New Roman', serif; cursor: pointer; touch-action: manipulation; }
+.info-btn:hover { background: var(--tint); }
+.info-btn[aria-expanded="true"] { background: var(--green); color: #fff; }
+.info-pop { background: var(--tint); border-radius: 14px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.info-pop p { margin: 0; }
+.label-info { display: inline-flex; align-items: center; gap: 8px; }
 .copy-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .copy-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: var(--tint); border: 1px solid var(--line); color: inherit; font: inherit; cursor: pointer; user-select: text; -webkit-user-select: text; touch-action: manipulation; }
 .copy-chip:hover { border-color: var(--green); }

@@ -19,6 +19,7 @@ const paths = {
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>,
   switch: <><path d="M4 8h14l-3-3" /><path d="M20 16H6l3 3" /></>,
   x: <><path d="M6 6l12 12M18 6L6 18" /></>,
+  copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></>,
 }
 
 export default function Icon({ name, size = 22, stroke = 1.8, className = '' }) {

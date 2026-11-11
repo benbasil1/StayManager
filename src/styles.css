@@ -67,6 +67,12 @@ code { background: var(--tint); padding: 1px 6px; border-radius: 6px; font-size:
 .icon-btn { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: var(--green); flex: none; }
 .icon-btn:hover { background: var(--tint); }
 .icon-btn.danger { color: var(--red); }
+.copy-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.copy-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: var(--tint); border: 1px solid var(--line); color: inherit; font: inherit; cursor: pointer; user-select: text; -webkit-user-select: text; touch-action: manipulation; }
+.copy-chip:hover { border-color: var(--green); }
+.copy-chip strong { font-weight: 700; }
+.copy-chip svg { color: var(--green); flex: none; }
+.copy-chip.copied { border-color: var(--green); color: var(--green); }
 .bottom-nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; justify-content: space-around;
   background: var(--card); border-top: 1px solid var(--line); padding: 10px 6px calc(10px + env(safe-area-inset-bottom));

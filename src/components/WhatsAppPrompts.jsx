@@ -1,8 +1,38 @@
 // Pop-ups for the PG WhatsApp group:
 //  1) right after a tenant is added: "Send welcome on WhatsApp" (welcome + group link + complaint QR link)
 //  2) when a tenant who joined the group is moved out: reminder to remove them from the group
+import { useState } from 'react'
 import { useData } from '../lib/store'
 import Icon from './Icon'
+
+// One-tap copy chip: shows the text, copies `value` to the clipboard when tapped.
+function CopyChip({ value, children }) {
+  const [copied, setCopied] = useState(false)
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      // Fallback for non-HTTPS pages / older browsers
+      const el = document.createElement('textarea')
+      el.value = value
+      el.style.position = 'fixed'
+      el.style.opacity = '0'
+      document.body.appendChild(el)
+      el.select()
+      try { document.execCommand('copy') } catch { /* ignore */ }
+      document.body.removeChild(el)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <button type="button" className={`copy-chip${copied ? ' copied' : ''}`} onClick={copy} title="Tap to copy">
+      {copied ? <><Icon name="check" size={14} /> Copied</> : <>{children}<Icon name="copy" size={14} /></>}
+    </button>
+  )
+}
 
 export default function WhatsAppPrompts() {
   const { welcomeId, removal, tenantRows, property, welcomeLink, markInvited, dismissWelcome, dismissRemoval } = useData()
@@ -48,7 +78,10 @@ export default function WhatsAppPrompts() {
           </div>
           <p className="muted">WhatsApp does not let an app remove people. Open the PG group, tap the group name, find the person below and choose Remove:</p>
           {removal.map((t) => (
-            <p key={t.id}><strong>{t.name}</strong> <span className="muted">{t.phone}</span></p>
+            <div key={t.id} className="copy-row">
+              <CopyChip value={t.name}><strong>{t.name}</strong></CopyChip>
+              {t.phone && <CopyChip value={String(t.phone)}><span className="muted">{t.phone}</span></CopyChip>}
+            </div>
           ))}
           <button type="button" className="btn primary block" onClick={dismissRemoval}>Done</button>
         </div>

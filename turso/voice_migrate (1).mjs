@@ -14,10 +14,19 @@ if (!url || !authToken) {
   console.error('Set TURSO_URL and TURSO_TOKEN first.');
   process.exit(1);
 }
-const db = createClient({ url, authToken });
+const db = createClient({ url: url.trim(), authToken: authToken.trim() });
+
+try {
+  await db.execute('SELECT 1');
+  console.log('Connected to Turso.');
+} catch (e) {
+  console.error('Could not connect:', e.message);
+  console.error('Check that TURSO_URL is the libsql://... address of THIS database and TURSO_TOKEN is a full, unexpired token for it (no quotes or spaces inside).');
+  process.exit(1);
+}
 
 async function cols(table) {
-  const r = await db.execute(`PRAGMA table_info(${table})`);
+  const r = await db.execute({ sql: `SELECT name, type FROM pragma_table_info(?)`, args: [table] });
   return r.rows.map((x) => ({ name: x.name, type: String(x.type || '').toUpperCase() }));
 }
 

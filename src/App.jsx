@@ -12,6 +12,7 @@ import Inbox from './components/Inbox'
 import Assistant from './components/Assistant'
 import Settings from './components/Settings'
 import Toasts from './components/Toasts'
+import ReportPage from './components/ReportPage'
 import { useInboxAlerts } from './lib/notify'
 
 const TABS = [
@@ -166,6 +167,9 @@ function RoleGate({ auth }) {
 }
 
 export default function App() {
+  // public QR page for tenants: works without any login
+  const report = window.location.hash.match(/^#\/report\/([\w-]+)/)
+  if (report) return <ReportPage code={report[1]} />
   const auth = useAuth()
   if (!auth.ready) return <div className="center-screen">Loading…</div>
   if (!auth.session) return <Login auth={auth} />

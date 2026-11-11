@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { usePrefs, setPref } from '../lib/prefs'
-import { addStaff, loadStaff, removeStaff, resetStaffPassword, sendFeedback } from '../lib/api'
+import QRCode from 'qrcode'
+import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, resetStaffPassword, sendFeedback } from '../lib/api'
 import { useData } from '../lib/store'
 import { alertsPref, browserAlertsSupported, setAlertsPref } from '../lib/notify'
 import Icon from './Icon'
@@ -153,6 +154,51 @@ function MyPgs() {
   )
 }
 
+function QrCard() {
+  const { property, demo } = useData()
+  const pid = property && property.id
+  const [url, setUrl] = useState('')
+  const [img, setImg] = useState('')
+  const [msg, setMsg] = useState('')
+
+  const make = useCallback(async (reset) => {
+    if (!pid || demo) return
+    setMsg('')
+    try {
+      const { code } = reset ? await resetReportCode(pid) : await getReportCode(pid)
+      const base = (import.meta.env.VITE_PUBLIC_URL || window.location.origin).replace(/\/+$/, '')
+      const link = `${base}/#/report/${code}`
+      setUrl(link)
+      setImg(await QRCode.toDataURL(link, { width: 640, margin: 2 }))
+    } catch (e) { setMsg(e.message || 'Could not create the QR code') }
+  }, [pid, demo])
+  useEffect(() => { make(false) }, [make])
+
+  if (demo) return <p className="muted">Demo mode has no QR code. Connect your server to use this.</p>
+
+  function print() {
+    const w = window.open('', '_blank')
+    if (!w) return
+    w.document.write(`<title>Complaint QR</title><body style="font-family:sans-serif;text-align:center;padding:40px"><h1 style="margin:0">${(property.name || '').replace(/</g, '&lt;')}</h1><h2>Scan to report a problem</h2><img src="${img}" style="width:380px;height:380px"><p>Open your phone camera and point it at this code.<br>No app needed.</p></body>`)
+    w.document.close()
+    w.focus()
+    w.print()
+  }
+
+  return (
+    <>
+      <p className="muted">Stick this QR in the PG. Tenants scan it, enter their phone number and room number, and describe the problem. It is matched to their profile and appears in Complaints for you and your attenders.</p>
+      {img && <img src={img} alt="Complaint QR code" style={{ width: 220, height: 220, borderRadius: 12, background: '#fff' }} />}
+      {msg && <div className="notice err">{msg}</div>}
+      <div className="status-row">
+        <button type="button" className="btn primary" onClick={print} disabled={!img}>Print QR</button>
+        <button type="button" className="btn ghost" onClick={() => { if (window.confirm('Make a new QR? The old printed QR will stop working.')) make(true) }}>New QR code</button>
+      </div>
+      {url && <p className="muted" style={{ wordBreak: 'break-all' }}>{url}</p>}
+    </>
+  )
+}
+
 function StaffManager() {
   const { property, demo } = useData()
   const pid = property && property.id
@@ -249,6 +295,11 @@ export default function Settings({ auth }) {
       <section className="card set-card">
         <h3>Attenders (staff)</h3>
         <StaffManager />
+      </section>
+
+      <section className="card set-card">
+        <h3>Complaint QR code</h3>
+        <QrCard />
       </section>
 
       <section className="card set-card">

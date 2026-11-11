@@ -113,3 +113,23 @@ export const loadStaff = (propertyId) => call('GET', `/staff?property_id=${encod
 export const addStaff = (row) => call('POST', '/staff', row)
 export const removeStaff = (id) => call('DELETE', `/staff/${id}`)
 export const resetStaffPassword = (id, password) => call('PATCH', `/staff/${id}`, { password })
+
+// ----- complaint QR -----
+export const getReportCode = (propertyId) => call('GET', `/properties/${propertyId}/qr`)
+export const resetReportCode = (propertyId) => call('POST', `/properties/${propertyId}/qr`)
+
+// public (no login): used by the page a tenant opens after scanning the QR
+async function publicCall(method, path, body) {
+  let res
+  try {
+    res = await fetch(`${BASE}/api${path}`, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  } catch {
+    throw new Error('Could not reach the server. Check your internet connection.')
+  }
+  let payload = null
+  try { payload = await res.json() } catch { /* empty body */ }
+  if (!res.ok) throw new Error(payload?.error || `Request failed (${res.status})`)
+  return payload
+}
+export const reportInfo = (code) => publicCall('GET', `/report/${encodeURIComponent(code)}`)
+export const sendReport = (code, data) => publicCall('POST', `/report/${encodeURIComponent(code)}`, data)

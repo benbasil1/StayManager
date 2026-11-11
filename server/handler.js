@@ -384,6 +384,95 @@ async function deleteFile(db, user, rawId) {
   return { ok: true }
 }
 
+// ───────────── complaint QR (public page, no login) ─────────────
+// One QR per PG. The QR holds a secret code (properties.report_code). A tenant types phone + room + message; the
+// server matches the phone against ACTIVE tenants of that PG. This page can only ADD a complaint, it never returns data.
+let reportReady = false
+async function ensureReportSchema(db) {
+  if (reportReady) return
+  try { await db.execute('ALTER TABLE properties ADD COLUMN report_code TEXT') } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+  await db.batch(
+    [
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_properties_report_code ON properties(report_code)',
+      'CREATE TABLE IF NOT EXISTS report_log (key TEXT NOT NULL, at TEXT NOT NULL)',
+      'CREATE INDEX IF NOT EXISTS idx_report_log ON report_log(key, at)',
+    ].map((sql) => ({ sql, args: [] })),
+    'write'
+  )
+  reportReady = true
+}
+const newReportCode = () => {
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+async function getReportCode(db, user, propertyId, reset) {
+  await requireOwner(db, user, propertyId)
+  await ensureReportSchema(db)
+  const cur = await one(db, 'SELECT report_code FROM properties WHERE id = ?', [propertyId])
+  if (cur?.report_code && !reset) return { code: cur.report_code }
+  const code = newReportCode()
+  await db.execute({ sql: 'UPDATE properties SET report_code = ? WHERE id = ?', args: [code, propertyId] })
+  return { code }
+}
+
+const REPORT_CATEGORIES = ['Maintenance', 'Cleaning', 'Water', 'Electricity', 'Wifi', 'Food', 'Noise', 'Other']
+const last10 = (v) => String(v || '').replace(/\D/g, '').slice(-10)
+const sameRoom = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
+
+async function reportRoute({ request, db, segments, body }) {
+  await ensureReportSchema(db)
+  const code = String(segments[1] || body?.code || '')
+  const prop = code.length >= 16 ? await one(db, 'SELECT id, name FROM properties WHERE report_code = ?', [code]) : null
+  if (!prop) throw new HttpError(404, 'This QR code is not valid any more. Ask the PG owner for the new one.')
+
+  if (request.method === 'GET') return { name: prop.name, categories: REPORT_CATEGORIES }
+  if (request.method !== 'POST') throw new HttpError(404, 'Not found')
+
+  if (body?.website) return { ok: true } // hidden field: only bots fill it in
+  const phone = last10(body?.phone)
+  const room = String(body?.room || '').trim().slice(0, 20)
+  const message = String(body?.message || '').trim().slice(0, 1000)
+  const typedName = String(body?.name || '').trim().slice(0, 80)
+  const category = REPORT_CATEGORIES.includes(body?.category) ? body.category : 'Other'
+  if (phone.length < 10) throw new HttpError(400, 'Please enter your 10-digit phone number.')
+  if (!room) throw new HttpError(400, 'Please enter your room number.')
+  if (message.length < 5) throw new HttpError(400, 'Please describe the problem (at least a few words).')
+
+  // simple rate limit: 5 reports per phone and 30 per network address per hour
+  const now = new Date()
+  const since = new Date(now.getTime() - 3600000).toISOString()
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown'
+  const count = async (key) => Number((await one(db, 'SELECT COUNT(*) AS n FROM report_log WHERE key = ? AND at > ?', [key, since])).n)
+  if ((await count('ph:' + phone)) >= 5 || (await count('ip:' + ip)) >= 30) throw new HttpError(429, 'Too many reports from you in the last hour. Please try again later, or call the PG.')
+  await db.batch(
+    [
+      { sql: 'INSERT INTO report_log (key, at) VALUES (?,?)', args: ['ph:' + phone, now.toISOString()] },
+      { sql: 'INSERT INTO report_log (key, at) VALUES (?,?)', args: ['ip:' + ip, now.toISOString()] },
+      { sql: 'DELETE FROM report_log WHERE at < ?', args: [new Date(now.getTime() - 2 * 86400000).toISOString()] },
+    ],
+    'write'
+  )
+
+  // match: the phone must belong to an active tenant of THIS PG; if several tenants share it, the room breaks the tie
+  const tenants = await all(
+    db,
+    `SELECT t.id, t.name, t.phone, t.whatsapp, r.room_no
+       FROM tenants t LEFT JOIN beds b ON b.id = t.bed_id LEFT JOIN rooms r ON r.id = b.room_id
+      WHERE t.property_id = ? AND t.status = 'active'`,
+    [prop.id]
+  )
+  const byPhone = tenants.filter((t) => last10(t.phone) === phone || last10(t.whatsapp) === phone)
+  const tenant = byPhone.length === 1 ? byPhone[0] : byPhone.find((t) => sameRoom(t.room_no, room)) || null
+
+  const row = tenant
+    ? { tenant_name: tenant.name, caller_phone: tenant.phone || phone, message: `(Room ${tenant.room_no || room}) ${message}` }
+    : { tenant_name: typedName || 'Unverified tenant', caller_phone: phone, message: `[Not matched to a tenant] (Room ${room}) ${message}` }
+  await db.execute(insertStmt('complaints', { id: uuid(), property_id: prop.id, category, priority: 'medium', kind: 'complaint', status: 'open', ...row }))
+  return { ok: true } // never says whether the phone matched
+}
+
 // ───────────── routing ─────────────
 async function route({ request, db, user, segments, url, body, env }) {
   const method = request.method
@@ -402,6 +491,8 @@ async function route({ request, db, user, segments, url, body, env }) {
       return one(db, 'SELECT * FROM properties WHERE id = ?', [id])
     }
     if (b && c === 'data' && method === 'GET') return loadPropertyData(db, user, b)
+    if (b && c === 'qr' && method === 'GET') return getReportCode(db, user, b, false)
+    if (b && c === 'qr' && method === 'POST') return getReportCode(db, user, b, true)
   }
 
   if (a === 'rooms') {
@@ -663,6 +754,7 @@ export async function handle({ request, db, env = {}, getUser }) {
       try { body = await request.json() } catch { body = {} }
     }
     if (segments[0] === 'voice') return json(await voiceRoute({ request, db, env, segments, body }))
+    if (segments[0] === 'report') return json(await reportRoute({ request, db, segments, body }))
     if (segments[0] === 'auth') return json(await authRoute({ request, db, env, segments, body }))
     const user = await getUser(request, env)
     const out = await route({ request, db, user, segments, url, body, env })

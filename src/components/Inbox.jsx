@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useData } from '../lib/store'
 import TenantDrawer from './TenantDrawer'
-import { fmtDate, fmtDateTime, fmtDuration, intentLabel, kindLabel, statusLabel } from '../lib/utils'
+import Icon from './Icon'
+import { fmtDate, fmtDateTime, fmtDuration, intentLabel, kindLabel, statusLabel, waLink } from '../lib/utils'
 
 const FILTERS = ['all', 'open', 'in_progress', 'resolved']
 
@@ -20,6 +21,19 @@ function findTenantRow(c, tenantRows) {
   if (byName.length <= 1) return byName[0] || null
   const roomNo = (String(c.message || '').match(/\(Room\s+([^)]+)\)/i) || [])[1]
   return (roomNo && byName.find((r) => String(r.room.room_no).toLowerCase() === roomNo.trim().toLowerCase())) || null
+}
+
+const pillStyle = { padding: '9px 16px', fontSize: '0.875rem' }
+
+// Call / WhatsApp buttons so the owner can reach the tenant straight from a complaint.
+function ContactButtons({ phone, whatsapp }) {
+  if (!phone) return null
+  return (
+    <div className="status-row">
+      <a className="act wa" style={pillStyle} href={`tel:${phone}`}><Icon name="phone" size={16} /> Call</a>
+      <a className="act" style={pillStyle} href={waLink(whatsapp || phone)} target="_blank" rel="noreferrer">WhatsApp</a>
+    </div>
+  )
 }
 
 function Complaints({ initialFilter }) {
@@ -42,6 +56,7 @@ function Complaints({ initialFilter }) {
         {list.length === 0 && <div className="empty">Nothing here. Complaints appear when tenants scan your QR code (Settings) or your voice agent logs them.</div>}
         {list.map((c) => {
           const row = findTenantRow(c, tenantRows)
+          const phone = (row && row.tenant.phone) || c.caller_phone
           return (
           <div className="item" key={c.id}>
             <div className="item-top">
@@ -63,6 +78,7 @@ function Complaints({ initialFilter }) {
                 </button>
               )}
             </div>
+            <ContactButtons phone={phone} whatsapp={row && row.tenant.whatsapp} />
           </div>
           )
         })}

@@ -257,9 +257,130 @@ async function ensureWaColumns(db) {
 }
 const WA_GROUP_RE = /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+(\?[^\s]*)?$/
 
+
+// ───────────── owner / attender phone numbers (printed on the QR poster, verified by SMS code) ─────────────
+// One owner number and one attender number per PG. When SMS is set up (secrets BREVO_API_KEY + SMS_SENDER) the owner must enter the
+// 6-digit code sent to the number before it is saved as "verified". Without SMS set up, numbers are saved but marked "not verified".
+let phoneReady = false
+async function ensurePhoneSchema(db) {
+  if (phoneReady) return
+  for (const sql of [
+    "ALTER TABLE properties ADD COLUMN owner_phone TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE properties ADD COLUMN attender_phone TEXT NOT NULL DEFAULT ''",
+    'ALTER TABLE properties ADD COLUMN owner_phone_verified INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE properties ADD COLUMN attender_phone_verified INTEGER NOT NULL DEFAULT 0',
+  ]) {
+    try { await db.execute(sql) } catch (e) {
+      if (!/duplicate column/i.test(String(e?.message || e))) throw e
+    }
+  }
+  await db.execute(
+    'CREATE TABLE IF NOT EXISTS phone_otps (property_id TEXT NOT NULL, which TEXT NOT NULL, phone TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, tries INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (property_id, which))'
+  )
+  phoneReady = true
+}
+const OTP_MINUTES = 10
+const OTP_MAX_TRIES = 5
+const OTP_MAX_SENDS_PER_HOUR = 5
+const PHONE_RE = /^[6-9]\d{9}$/
+const normPhone = (v) => {
+  let d = String(v || '').replace(/\D/g, '')
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2)
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1)
+  return d
+}
+const smsReady = (env) => !!(env.BREVO_API_KEY && env.SMS_SENDER)
+const sha256hex = async (t) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map((x) => x.toString(16).padStart(2, '0')).join('')
+
+// Sends a text message through Brevo's transactional SMS. Needs SMS credits in Brevo and, in India, a DLT-registered sender and template.
+async function sendSms(env, phone10, content) {
+  const headers = { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json', accept: 'application/json' }
+  const body = JSON.stringify({ sender: String(env.SMS_SENDER).trim().slice(0, 11), recipient: '91' + phone10, content, type: 'transactional', tag: 'phone-verify' })
+  let res = await fetch('https://api.brevo.com/v3/transactionalSMS/send', { method: 'POST', headers, body })
+  if (res.status === 404) res = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', { method: 'POST', headers, body })
+  if (!res.ok) {
+    console.error('SMS failed:', res.status, (await res.text()).slice(0, 300))
+    throw new HttpError(502, 'Could not send the SMS code. Check that SMS credits and the sender are set up in Brevo, then try again.')
+  }
+}
+
+async function phoneRoute({ db, user, env, propertyId, action, body }) {
+  await requireOwner(db, user, propertyId)
+  await ensurePhoneSchema(db)
+  await ensureReportSchema(db)
+  const which = body?.which === 'owner' || body?.which === 'attender' ? body.which : null
+  if (!which) throw bad('Unknown number type.')
+  const col = `${which}_phone`
+  const vcol = `${col}_verified`
+
+  if (action === 'send') {
+    const raw = String(body?.phone || '').trim()
+    if (!raw) { // empty box = remove the number
+      await db.batch(
+        [
+          { sql: `UPDATE properties SET ${col} = '', ${vcol} = 0 WHERE id = ?`, args: [propertyId] },
+          { sql: 'DELETE FROM phone_otps WHERE property_id = ? AND which = ?', args: [propertyId, which] },
+        ],
+        'write'
+      )
+      return { cleared: true }
+    }
+    const phone = normPhone(raw)
+    if (!PHONE_RE.test(phone)) throw bad('Please enter a valid 10-digit mobile number.')
+    if (!smsReady(env)) { // SMS not set up yet: save it, but it stays "not verified"
+      await db.execute({ sql: `UPDATE properties SET ${col} = ?, ${vcol} = 0 WHERE id = ?`, args: [phone, propertyId] })
+      return { saved: true, verified: false, sms: false }
+    }
+    const now = new Date()
+    const key = 'otp:' + propertyId
+    const sent = await one(db, 'SELECT COUNT(*) AS n FROM report_log WHERE key = ? AND at > ?', [key, new Date(now.getTime() - 3600000).toISOString()])
+    if (Number(sent?.n) >= OTP_MAX_SENDS_PER_HOUR) throw new HttpError(429, 'Too many codes requested. Please try again in an hour.')
+    const code = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000))
+    await db.batch(
+      [
+        { sql: 'INSERT INTO report_log (key, at) VALUES (?,?)', args: [key, now.toISOString()] },
+        {
+          sql: 'INSERT OR REPLACE INTO phone_otps (property_id, which, phone, code_hash, expires_at, tries) VALUES (?,?,?,?,?,0)',
+          args: [propertyId, which, phone, await sha256hex(`${propertyId}:${which}:${phone}:${code}`), new Date(now.getTime() + OTP_MINUTES * 60000).toISOString()],
+        },
+      ],
+      'write'
+    )
+    try {
+      await sendSms(env, phone, `${code} is your StayManager verification code. It is valid for ${OTP_MINUTES} minutes. Do not share it.`)
+    } catch (e) {
+      await db.execute({ sql: 'DELETE FROM phone_otps WHERE property_id = ? AND which = ?', args: [propertyId, which] })
+      throw e
+    }
+    return { sent: true, sms: true }
+  }
+
+  if (action === 'verify') {
+    const row = await one(db, 'SELECT phone, code_hash, expires_at, tries FROM phone_otps WHERE property_id = ? AND which = ?', [propertyId, which])
+    const expired = () => bad('This code has expired. Please request a new one.')
+    if (!row || row.expires_at < new Date().toISOString()) throw expired()
+    if (Number(row.tries) >= OTP_MAX_TRIES) throw bad('Too many wrong codes. Please request a new one.')
+    const code = String(body?.code || '').replace(/\D/g, '')
+    if ((await sha256hex(`${propertyId}:${which}:${row.phone}:${code}`)) !== row.code_hash) {
+      await db.execute({ sql: 'UPDATE phone_otps SET tries = tries + 1 WHERE property_id = ? AND which = ?', args: [propertyId, which] })
+      throw bad('That code is not correct. Please check the SMS and try again.')
+    }
+    await db.batch(
+      [
+        { sql: `UPDATE properties SET ${col} = ?, ${vcol} = 1 WHERE id = ?`, args: [row.phone, propertyId] },
+        { sql: 'DELETE FROM phone_otps WHERE property_id = ? AND which = ?', args: [propertyId, which] },
+      ],
+      'write'
+    )
+    return { verified: true }
+  }
+  throw new HttpError(404, 'Not found')
+}
+
 // ───────────── handlers ─────────────
 async function loadProperties(db, user) {
   await ensureWaColumns(db)
+  await ensurePhoneSchema(db)
   await ensureIndexes(db)
   return all(db, 'SELECT * FROM properties WHERE owner_id = ? ORDER BY created_at', [user.id])
 }
@@ -616,7 +737,7 @@ async function reportRoute({ request, db, segments, body }) {
 // ───────────── routing ─────────────
 async function route({ request, db, user, segments, url, body, env }) {
   const method = request.method
-  const [a, b, c] = segments // e.g. ['rooms', '<id>']
+  const [a, b, c, d] = segments // e.g. ['rooms', '<id>']
 
   if (a === 'role' && method === 'GET') return role(db, user)
 
@@ -643,6 +764,8 @@ async function route({ request, db, user, segments, url, body, env }) {
       await db.execute({ sql: 'UPDATE properties SET wa_group_link = ? WHERE id = ?', args: [link || null, b] })
       return { ok: true }
     }
+    if (b && c === 'phone' && !d && method === 'POST') return phoneRoute({ db, user, env, propertyId: b, action: 'send', body })
+    if (b && c === 'phone' && d === 'verify' && method === 'POST') return phoneRoute({ db, user, env, propertyId: b, action: 'verify', body })
     if (b && c === 'qr' && method === 'GET') return getReportCode(db, user, b, false)
     if (b && c === 'qr' && method === 'POST') return getReportCode(db, user, b, true)
   }

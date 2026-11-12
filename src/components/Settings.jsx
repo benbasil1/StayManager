@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { usePrefs, setPref } from '../lib/prefs'
 import QRCode from 'qrcode'
-import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, resetStaffPassword, sendFeedback } from '../lib/api'
+import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, resetStaffPassword, sendFeedback, sendPhoneCode, verifyPhoneCode } from '../lib/api'
+import { posterHtml } from '../lib/poster'
 import { useData } from '../lib/store'
 import { alertsPref, browserAlertsSupported, setAlertsPref } from '../lib/notify'
 import Icon from './Icon'
@@ -165,6 +166,101 @@ function MyPgs() {
   )
 }
 
+function PhoneRow({ which, label }) {
+  const { property, reload } = useData()
+  const pid = property && property.id
+  const saved = (property && property[`${which}_phone`]) || ''
+  const verified = !!(property && property[`${which}_phone_verified`])
+  const [value, setValue] = useState(saved)
+  const [code, setCode] = useState('')
+  const [asking, setAsking] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState({ type: '', text: '' })
+  useEffect(() => { setValue(saved); setAsking(false); setCode('') }, [saved, pid])
+  useEffect(() => { setMsg({ type: '', text: '' }) }, [pid])
+
+  const digits = (v) => String(v || '').replace(/\D/g, '').slice(-10)
+  const unchanged = digits(value) === digits(saved) && (verified || !saved)
+
+  async function send(e) {
+    e.preventDefault()
+    setMsg({ type: '', text: '' })
+    setBusy(true)
+    try {
+      const r = await sendPhoneCode(pid, which, value)
+      if (r.sent) {
+        setAsking(true)
+        setMsg({ type: 'ok', text: 'We sent a 6-digit code by SMS to this number. Enter it below.' })
+      } else {
+        await reload(true)
+        setMsg({ type: 'ok', text: r.cleared ? 'Number removed.' : 'Saved. SMS verification is not switched on yet, so this number shows as not verified.' })
+      }
+    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not send the code' }) }
+    setBusy(false)
+  }
+  async function confirm(e) {
+    e.preventDefault()
+    setMsg({ type: '', text: '' })
+    setBusy(true)
+    try {
+      await verifyPhoneCode(pid, which, code)
+      await reload(true)
+      setAsking(false)
+      setCode('')
+      setMsg({ type: 'ok', text: 'Number verified.' })
+    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not verify the code' }) }
+    setBusy(false)
+  }
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <form className="login-form" style={{ marginTop: 0 }} onSubmit={asking ? confirm : send}>
+        <label>
+          {label}
+          {saved && <span style={{ marginLeft: 8, fontWeight: 600, fontSize: '0.85em', color: verified ? 'var(--ok, #1f8a4c)' : 'var(--muted, #777)' }}>{verified ? '✓ Verified' : 'Not verified'}</span>}
+          <input type="tel" inputMode="numeric" value={value} onChange={(e) => setValue(e.target.value)} placeholder="10-digit mobile number" autoComplete="off" disabled={asking} />
+        </label>
+        {asking && (
+          <label>SMS code
+            <input inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} placeholder="6-digit code" autoComplete="one-time-code" autoFocus />
+          </label>
+        )}
+        {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
+        <div className="status-row">
+          {asking ? (
+            <>
+              <button className="btn primary" disabled={busy || code.length !== 6}>{busy ? 'Checking…' : 'Verify'}</button>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => { setAsking(false); setCode(''); setMsg({ type: '', text: '' }) }}>Change number</button>
+            </>
+          ) : (
+            <button className="btn primary" disabled={busy || unchanged}>{busy ? 'Please wait…' : !value.trim() && saved ? 'Remove number' : 'Save and verify'}</button>
+          )}
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function ContactCard() {
+  const { demo } = useData()
+  return (
+    <>
+      <SectionHead
+        title="Contact numbers (for the QR poster)"
+        info={<p className="muted">These two numbers are printed on the QR poster under “Urgent? Call us directly”, so tenants can phone you or your attender. We send a 6-digit SMS code to each number to confirm it is real. Leave a box empty to leave that number off the poster.</p>}
+      />
+      {demo ? (
+        <p className="muted">Demo mode cannot send SMS. Connect your server to use this.</p>
+      ) : (
+        <>
+          <PhoneRow which="owner" label="Owner number" />
+          <PhoneRow which="attender" label="Attender number" />
+        </>
+      )}
+    </>
+  )
+}
+
 function QrCard() {
   const { property, demo } = useData()
   const pid = property && property.id
@@ -196,11 +292,9 @@ function QrCard() {
 
   function print() {
     const w = window.open('', '_blank')
-    if (!w) return
-    w.document.write(`<title>Complaint QR</title><body style="font-family:sans-serif;text-align:center;padding:40px"><h1 style="margin:0">${(property.name || '').replace(/</g, '&lt;')}</h1><h2>Scan to report a problem</h2><img src="${img}" style="width:380px;height:380px"><p>Open your phone camera and point it at this code.<br>No app needed.</p></body>`)
-    w.document.close()
-    w.focus()
-    w.print()
+    if (!w) { setMsg('Your browser blocked the print window. Allow pop-ups for this site and try again.'); return }
+    w.document.write(posterHtml({ name: property.name, qrImage: img, link: url, ownerPhone: property.owner_phone, attenderPhone: property.attender_phone }))
+    w.document.close() // the poster prints itself once its fonts have loaded
   }
 
   return (
@@ -215,6 +309,7 @@ function QrCard() {
         <button type="button" className="btn primary" onClick={print} disabled={!img}>Print QR</button>
         <button type="button" className="btn ghost" onClick={() => { if (window.confirm('Make a new QR? The old printed QR will stop working.')) make(true) }}>New QR code</button>
       </div>
+      {!(property.owner_phone || property.attender_phone) && <p className="muted">Tip: add the owner and attender numbers in the card above so people can call you directly from the poster.</p>}
       {url && <p className="muted" style={{ wordBreak: 'break-all' }}>{url}</p>}
     </>
   )
@@ -378,6 +473,10 @@ export default function Settings({ auth }) {
 
       <section className="card set-card">
         <StaffManager />
+      </section>
+
+      <section className="card set-card">
+        <ContactCard />
       </section>
 
       <section className="card set-card">

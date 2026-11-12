@@ -27,12 +27,13 @@ function findTenantRow(c, tenantRows) {
 const pillStyle = { padding: '9px 16px', fontSize: '0.875rem' }
 
 // Call / WhatsApp buttons so the owner can reach the tenant straight from a complaint.
-function ContactButtons({ phone, whatsapp }) {
-  if (!phone) return null
+function ContactButtons({ phone, whatsapp, onDetails }) {
+  if (!phone && !onDetails) return null
   return (
     <div className="status-row">
-      <a className="act wa" style={pillStyle} href={`tel:${phone}`}><Icon name="phone" size={16} /> Call</a>
-      <a className="act" style={pillStyle} href={waLink(whatsapp || phone)} target="_blank" rel="noreferrer">WhatsApp</a>
+      {phone && <a className="act wa" style={pillStyle} href={`tel:${phone}`}><Icon name="phone" size={16} /> Call</a>}
+      {phone && <a className="act" style={pillStyle} href={waLink(whatsapp || phone)} target="_blank" rel="noreferrer">WhatsApp</a>}
+      {onDetails && <button type="button" className="act" style={pillStyle} onClick={onDetails}>Tenant details</button>}
     </div>
   )
 }
@@ -73,14 +74,9 @@ function Complaints({ initialFilter }) {
                   {statusLabel[s]}
                 </button>
               ))}
-              {row && (
-                <button className="status" style={{ marginLeft: 'auto' }} onClick={() => setOpenTenantId(row.tenant.id)}>
-                  Tenant details
-                </button>
-              )}
             </div>
             <NotifyTenant complaint={c} phone={(row && row.tenant.whatsapp) || phone} pgName={property && property.name} onSent={markComplaintNotified} />
-            <ContactButtons phone={phone} whatsapp={row && row.tenant.whatsapp} />
+            <ContactButtons phone={phone} whatsapp={row && row.tenant.whatsapp} onDetails={row ? () => setOpenTenantId(row.tenant.id) : undefined} />
           </div>
           )
         })}

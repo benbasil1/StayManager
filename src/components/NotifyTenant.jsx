@@ -4,6 +4,7 @@ import Icon from './Icon'
 import { complaintUpdateText, waLink } from '../lib/utils'
 
 const pillStyle = { padding: '9px 16px', fontSize: '0.875rem' }
+const doneStyle = { display: 'inline-flex', alignItems: 'center', padding: '9px 14px', borderRadius: 999, background: 'var(--ok-bg)', color: 'var(--ok-ink)', fontWeight: 700, fontSize: '0.875rem' }
 
 export default function NotifyTenant({ complaint, phone, pgName, onSent }) {
   const c = complaint
@@ -13,9 +14,10 @@ export default function NotifyTenant({ complaint, phone, pgName, onSent }) {
   const sent = () => { if (onSent) onSent(c.id, c.status) }
   if (c.notified_status === c.status) {
     return (
-      <p className="meta" style={{ marginTop: 8 }}>
-        ✓ Tenant informed · <a href={href} target="_blank" rel="noreferrer" onClick={sent}>Send again</a>
-      </p>
+      <div className="status-row">
+        <span style={doneStyle}>✓ Tenant informed</span>
+        <a className="act" style={pillStyle} href={href} target="_blank" rel="noreferrer" onClick={sent}>Send again</a>
+      </div>
     )
   }
   return (

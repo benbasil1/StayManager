@@ -39,7 +39,7 @@ function Complaints({ initialFilter }) {
         ))}
       </div>
       <div className="list">
-        {list.length === 0 && <div className="empty">Nothing here. Complaints from tenants appear when your voice agent logs them.</div>}
+        {list.length === 0 && <div className="empty">Nothing here. Complaints appear when tenants scan your QR code (Settings) or your voice agent logs them.</div>}
         {list.map((c) => {
           const row = findTenantRow(c, tenantRows)
           return (

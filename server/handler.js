@@ -20,7 +20,7 @@ const FORBIDDEN = () => new HttpError(403, 'Not allowed')
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data ?? null), {
     status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...CORS },
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...CORS },
   })
 
 // ───────────── column whitelists (the client can never set anything else) ─────────────
@@ -45,6 +45,85 @@ const CALL_COLS = ['property_id', 'caller_name', 'summary', 'intent', 'sentiment
 const COMPLAINT_COLS = ['property_id', 'tenant_name', 'message', 'category', 'priority', 'kind', 'status', 'caller_phone', 'notified_status']
 
 const uuid = () => crypto.randomUUID()
+
+// "Today" in India (the app is built for Indian PGs), so dates do not roll over at 5:30 am.
+const todayIST = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10)
+const MAX_PROPERTIES_PER_OWNER = 25
+
+// ───────────── input checks: clear messages instead of raw database errors ─────────────
+const bad = (m) => new HttpError(400, m)
+function text(row, k, max, label, { nonEmpty = false, must = false } = {}) {
+  if (row[k] === undefined) { if (must) throw bad(`${label} is required.`); return }
+  if (row[k] === null) { if (nonEmpty || must) throw bad(`${label} is required.`); return }
+  const v = String(row[k]).trim()
+  if (nonEmpty && !v) throw bad(`${label} is required.`)
+  if (v.length > max) throw bad(`${label} is too long (max ${max} characters).`)
+  row[k] = v
+}
+function whole(row, k, min, max, label, must = false) {
+  if (row[k] === undefined) { if (must) throw bad(`${label} is required.`); return }
+  if (row[k] === null || row[k] === '') throw bad(`${label} is required.`)
+  const n = Number(row[k])
+  if (!Number.isInteger(n) || n < min || n > max) throw bad(`${label} must be a whole number from ${min} to ${max}.`)
+  row[k] = n
+}
+function day(row, k, label, { nullable = true, must = false } = {}) {
+  if (row[k] === undefined) { if (must) throw bad(`${label} is required.`); return }
+  if (row[k] === null || row[k] === '') {
+    if (!nullable) throw bad(`${label} is required.`)
+    row[k] = null
+    return
+  }
+  const v = String(row[k]).trim()
+  const d = new Date(v + 'T00:00:00Z')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) throw bad(`${label} is not a valid date.`)
+  row[k] = v
+}
+function oneOf(row, k, list, label) {
+  if (row[k] !== undefined && !list.includes(row[k])) throw bad(`${label} is not valid.`)
+}
+function checkTenant(t, insert) {
+  text(t, 'name', 120, 'Name', { nonEmpty: true, must: insert })
+  text(t, 'phone', 20, 'Phone')
+  text(t, 'whatsapp', 20, 'WhatsApp number')
+  text(t, 'email', 200, 'Email')
+  text(t, 'notes', 2000, 'Notes')
+  text(t, 'id_type', 40, 'ID type')
+  text(t, 'id_last4', 8, 'ID last digits')
+  text(t, 'wa_invited_at', 40, 'Invite time')
+  whole(t, 'rent_amount', 0, 10000000, 'Rent')
+  whole(t, 'deposit', 0, 100000000, 'Deposit')
+  whole(t, 'due_day', 1, 28, 'Due day')
+  day(t, 'move_in', 'Move-in date', { nullable: false })
+  day(t, 'move_out', 'Move-out date')
+  day(t, 'leaving_on', 'Leaving date')
+  oneOf(t, 'status', ['active', 'left'], 'Status')
+  if (t.id_doc_paths !== undefined) {
+    let list
+    try { list = JSON.parse(t.id_doc_paths) } catch { list = null }
+    if (!Array.isArray(list) || list.length > 20 || list.some((p) => typeof p !== 'string' || p.length > 200)) throw bad('ID documents list is not valid.')
+  }
+}
+function checkRoom(r, insert) {
+  text(r, 'room_no', 20, 'Room number', { nonEmpty: true, must: insert })
+  whole(r, 'floor', -5, 100, 'Floor')
+  whole(r, 'price', 0, 10000000, 'Price')
+}
+function checkBed(b, insert) {
+  text(b, 'label', 40, 'Bed name', { nonEmpty: true, must: insert })
+  oneOf(b, 'occupied', [0, 1], 'Occupied')
+  day(b, 'vacant_since', 'Vacant since')
+}
+function checkPayment(p, insert) {
+  whole(p, 'amount', 1, 100000000, 'Amount', insert)
+  day(p, 'paid_on', 'Payment date', { nullable: false, must: insert })
+  if (p.for_month !== undefined || insert) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(p.for_month || ''))) throw bad('Month is not valid.')
+  }
+  text(p, 'method', 30, 'Payment method')
+  text(p, 'note', 500, 'Note')
+  text(p, 'proof_path', 200, 'Screenshot')
+}
 
 // ───────────── file storage limits (ID photos, payment screenshots) ─────────────
 // The app shrinks photos to ~300-500 KB before uploading, so these are generous ceilings.
@@ -135,6 +214,36 @@ async function checkBedInProperty(db, bedId, propertyId) {
   if ((await propertyOfBed(db, bedId)) !== propertyId) throw FORBIDDEN()
 }
 
+// A bed must never have two active tenants (two phones tapping at once, or an old screen). The index below enforces it
+// in the database; the code checks first so the owner gets a clear message. If old data already breaks the rule the
+// index is skipped (it never blocks the app from starting).
+async function bedIsFree(db, bedId, exceptTenantId = '') {
+  return !(await one(db, "SELECT 1 AS ok FROM tenants WHERE bed_id = ? AND status = 'active' AND id <> ?", [bedId, exceptTenantId]))
+}
+const BED_TAKEN = () => new HttpError(409, 'This bed already has a tenant. Refresh and pick another bed.')
+
+// ───────────── indexes (created once per server start; safe to run again) ─────────────
+let indexesReady = false
+async function ensureIndexes(db) {
+  if (indexesReady) return
+  try {
+    await db.batch(
+      [
+        'CREATE INDEX IF NOT EXISTS idx_complaints_pulse ON complaints(property_id, status, created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_calls_prop_created ON calls(property_id, created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_payments_prop_paid ON payments(property_id, paid_on)',
+        'CREATE INDEX IF NOT EXISTS idx_tenants_prop_status ON tenants(property_id, status)',
+        'CREATE INDEX IF NOT EXISTS idx_tenants_phone ON tenants(phone)',
+      ].map((sql) => ({ sql, args: [] })),
+      'write'
+    )
+  } catch (e) { console.error('index setup skipped:', String(e?.message || e)) }
+  try {
+    await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_tenant_per_bed ON tenants(bed_id) WHERE status = 'active' AND bed_id IS NOT NULL")
+  } catch (e) { console.error('one-tenant-per-bed index skipped (duplicates exist):', String(e?.message || e)) }
+  indexesReady = true
+}
+
 // ───────────── WhatsApp group link + "invited" mark (columns are added automatically on first use) ─────────────
 let waReady = false
 async function ensureWaColumns(db) {
@@ -151,7 +260,21 @@ const WA_GROUP_RE = /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]+(\?[^\s]*)?$/
 // ───────────── handlers ─────────────
 async function loadProperties(db, user) {
   await ensureWaColumns(db)
+  await ensureIndexes(db)
   return all(db, 'SELECT * FROM properties WHERE owner_id = ? ORDER BY created_at', [user.id])
+}
+
+// Very cheap "did anything change?" check. The app asks this every few seconds instead of re-downloading everything,
+// and only does a full reload when the fingerprint is different (new call, new complaint, status change).
+const PULSE_QUERIES = [
+  'SELECT status, COUNT(*) AS n, MAX(created_at) AS latest FROM complaints WHERE property_id = ? GROUP BY status ORDER BY status',
+  'SELECT COUNT(*) AS n, MAX(created_at) AS latest FROM calls WHERE property_id = ?',
+]
+const pulseValue = (cm, cl) => JSON.stringify([cm.map((r) => [r.status, r.n, r.latest]), cl.map((r) => [r.n, r.latest])])
+async function pulse(db, user, propertyId) {
+  await requireOwner(db, user, propertyId)
+  const [cm, cl] = (await db.batch(PULSE_QUERIES.map((sql) => ({ sql, args: [propertyId] })), 'read')).map(toObjects)
+  return { v: pulseValue(cm, cl) }
 }
 
 async function loadPropertyData(db, user, propertyId) {
@@ -162,14 +285,15 @@ async function loadPropertyData(db, user, propertyId) {
     [
       q('SELECT * FROM rooms WHERE property_id = ? ORDER BY room_no'),
       q('SELECT b.* FROM beds b JOIN rooms r ON r.id = b.room_id WHERE r.property_id = ?'),
-      q('SELECT * FROM complaints WHERE property_id = ? ORDER BY created_at DESC'),
+      q('SELECT * FROM complaints WHERE property_id = ? ORDER BY created_at DESC LIMIT 1000'),
       q('SELECT * FROM calls WHERE property_id = ? ORDER BY created_at DESC LIMIT 300'),
       q('SELECT * FROM tenants WHERE property_id = ? ORDER BY created_at'),
       q('SELECT * FROM payments WHERE property_id = ? ORDER BY paid_on DESC'),
+      ...PULSE_QUERIES.map(q),
     ],
     'read'
   )
-  const [rooms, beds, complaints, calls, tenants, payments] = res.map(toObjects)
+  const [rooms, beds, complaints, calls, tenants, payments, pulseComplaints, pulseCalls] = res.map(toObjects)
   const bedsByRoom = {}
   beds.map(fixBeds).forEach((b) => (bedsByRoom[b.room_id] ||= []).push(b))
   return {
@@ -178,6 +302,7 @@ async function loadPropertyData(db, user, propertyId) {
     calls: calls.map(fixCalls),
     tenants: tenants.map(fixTenant),
     payments,
+    pulse: { v: pulseValue(pulseComplaints, pulseCalls) },
   }
 }
 
@@ -268,7 +393,7 @@ async function seedDemo(db, user) {
       if (n % 2 === 0) {
         stmts.push({
           sql: "INSERT INTO payments (id, property_id, tenant_id, amount, paid_on, for_month, method) VALUES (?,?,?,?,?,?,'Cash')",
-          args: [uuid(), pid, tid, price, ymd(now), ymd(now).slice(0, 7)],
+          args: [uuid(), pid, tid, price, todayIST(), todayIST().slice(0, 7)],
         })
       }
     }
@@ -501,11 +626,15 @@ async function route({ request, db, user, segments, url, body, env }) {
       await requireCanOwn(db, user)
       const name = String(body?.name || '').trim()
       if (!name) throw new HttpError(400, 'Name is required')
-      const id = body.id || uuid()
+      if (name.length > 100) throw new HttpError(400, 'PG name is too long (max 100 characters).')
+      const have = Number((await one(db, 'SELECT COUNT(*) AS n FROM properties WHERE owner_id = ?', [user.id])).n)
+      if (have >= MAX_PROPERTIES_PER_OWNER) throw new HttpError(400, `You can have up to ${MAX_PROPERTIES_PER_OWNER} PGs on one account.`)
+      const id = uuid()
       await db.execute(insertStmt('properties', { id, owner_id: user.id, name }))
       return one(db, 'SELECT * FROM properties WHERE id = ?', [id])
     }
     if (b && c === 'data' && method === 'GET') return loadPropertyData(db, user, b)
+    if (b && c === 'pulse' && method === 'GET') return pulse(db, user, b)
     if (b && !c && method === 'PATCH') {
       await requireOwner(db, user, b)
       await ensureWaColumns(db)
@@ -522,17 +651,23 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (!b && method === 'POST') {
       const room = pick(body, INSERT_COLS.rooms)
       room.id ||= uuid()
+      checkRoom(room, true)
       await requireOwner(db, user, room.property_id)
+      const beds = (Array.isArray(body.beds) ? body.beds : []).slice(0, 20)
       const stmts = [insertStmt('rooms', room)]
-      for (const bed of Array.isArray(body.beds) ? body.beds : []) {
-        stmts.push(insertStmt('beds', { ...pick(bed, INSERT_COLS.beds), id: bed.id || uuid(), room_id: room.id }))
+      for (const bed of beds) {
+        const row = { ...pick(bed, INSERT_COLS.beds), id: bed.id || uuid(), room_id: room.id }
+        checkBed(row, true)
+        stmts.push(insertStmt('beds', row))
       }
       await db.batch(stmts, 'write')
       return { ok: true }
     }
     if (b && method === 'PATCH') {
       await requireOwnerOfRow(db, user, 'rooms', b)
-      await db.execute(updateStmt('rooms', b, pick(body, PATCH_COLS.rooms)))
+      const patch = pick(body, PATCH_COLS.rooms)
+      checkRoom(patch, false)
+      await db.execute(updateStmt('rooms', b, patch))
       return { ok: true }
     }
     if (b && method === 'DELETE') {
@@ -540,7 +675,7 @@ async function route({ request, db, user, segments, url, body, env }) {
       // tenants in this room's beds are released first (the database also does ON DELETE SET NULL)
       await db.batch(
         [
-          { sql: "UPDATE tenants SET status = 'left' WHERE bed_id IN (SELECT id FROM beds WHERE room_id = ?)", args: [b] },
+          { sql: "UPDATE tenants SET status = 'left', move_out = COALESCE(move_out, ?) WHERE bed_id IN (SELECT id FROM beds WHERE room_id = ?)", args: [todayIST(), b] },
           { sql: 'DELETE FROM rooms WHERE id = ?', args: [b] },
         ],
         'write'
@@ -553,20 +688,23 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (!b && method === 'POST') {
       const bed = pick(body, INSERT_COLS.beds)
       bed.id ||= uuid()
+      checkBed(bed, true)
       await requireOwner(db, user, await propertyOfRoom(db, bed.room_id))
       await db.execute(insertStmt('beds', bed))
       return { ok: true }
     }
     if (b && method === 'PATCH') {
       await requireOwnerOfRow(db, user, 'beds', b)
-      await db.execute(updateStmt('beds', b, pick(body, PATCH_COLS.beds)))
+      const patch = pick(body, PATCH_COLS.beds)
+      checkBed(patch, false)
+      await db.execute(updateStmt('beds', b, patch))
       return { ok: true }
     }
     if (b && method === 'DELETE') {
       await requireOwnerOfRow(db, user, 'beds', b)
       await db.batch(
         [
-          { sql: "UPDATE tenants SET status = 'left' WHERE bed_id = ?", args: [b] },
+          { sql: "UPDATE tenants SET status = 'left', move_out = COALESCE(move_out, ?) WHERE bed_id = ?", args: [todayIST(), b] },
           { sql: 'DELETE FROM beds WHERE id = ?', args: [b] },
         ],
         'write'
@@ -579,18 +717,38 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (!b && method === 'POST') {
       const t = pick(body, INSERT_COLS.tenants)
       t.id ||= uuid()
+      checkTenant(t, true)
       await requireOwner(db, user, t.property_id)
       await checkBedInProperty(db, t.bed_id, t.property_id)
-      await db.execute(insertStmt('tenants', t))
+      await ensureIndexes(db)
+      const active = (t.status ?? 'active') === 'active'
+      if (t.bed_id != null && active && !(await bedIsFree(db, t.bed_id))) throw BED_TAKEN()
+      // the tenant and the "bed is occupied" mark are saved together, so they can never disagree
+      const stmts = [insertStmt('tenants', t)]
+      if (t.bed_id != null && active) stmts.push({ sql: 'UPDATE beds SET occupied = 1, vacant_since = NULL WHERE id = ?', args: [t.bed_id] })
+      await db.batch(stmts, 'write')
       return { ok: true }
     }
     if (b && method === 'PATCH') {
       const pid = await propertyOfRow(db, 'tenants', b)
       await requireOwner(db, user, pid)
       const patch = pick(body, PATCH_COLS.tenants)
+      checkTenant(patch, false)
       if ('wa_invited_at' in patch) await ensureWaColumns(db)
       if ('bed_id' in patch) await checkBedInProperty(db, patch.bed_id, pid)
-      await db.execute(updateStmt('tenants', b, patch))
+      const cur = await one(db, 'SELECT bed_id, status FROM tenants WHERE id = ?', [b])
+      const newBed = 'bed_id' in patch ? patch.bed_id : cur.bed_id
+      const newStatus = patch.status ?? cur.status
+      const stmts = [updateStmt('tenants', b, patch)]
+      // moving out / changing bed frees the old bed; taking a bed marks it occupied (all in one save)
+      if (cur.bed_id && (newBed !== cur.bed_id || newStatus !== 'active')) {
+        stmts.push({ sql: 'UPDATE beds SET occupied = 0, vacant_since = ? WHERE id = ?', args: [todayIST(), cur.bed_id] })
+      }
+      if (newBed && newStatus === 'active' && (newBed !== cur.bed_id || cur.status !== 'active')) {
+        if (!(await bedIsFree(db, newBed, b))) throw BED_TAKEN()
+        stmts.push({ sql: 'UPDATE beds SET occupied = 1, vacant_since = NULL WHERE id = ?', args: [newBed] })
+      }
+      await db.batch(stmts, 'write')
       return { ok: true }
     }
   }
@@ -599,6 +757,7 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (!b && method === 'POST') {
       const p = pick(body, INSERT_COLS.payments)
       p.id ||= uuid()
+      checkPayment(p, true)
       await requireOwner(db, user, p.property_id)
       if ((await propertyOfTenant(db, p.tenant_id)) !== p.property_id) throw FORBIDDEN()
       await db.execute(insertStmt('payments', p))
@@ -606,7 +765,9 @@ async function route({ request, db, user, segments, url, body, env }) {
     }
     if (b && method === 'PATCH') {
       await requireOwnerOfRow(db, user, 'payments', b)
-      await db.execute(updateStmt('payments', b, pick(body, PATCH_COLS.payments)))
+      const patch = pick(body, PATCH_COLS.payments)
+      checkPayment(patch, false)
+      await db.execute(updateStmt('payments', b, patch))
       return { ok: true }
     }
     if (b && method === 'DELETE') {
@@ -618,12 +779,18 @@ async function route({ request, db, user, segments, url, body, env }) {
 
   if (a === 'complaints' && b && method === 'PATCH') {
     await requireOwnerOfRow(db, user, 'complaints', b)
-    await db.execute(updateStmt('complaints', b, pick(body, PATCH_COLS.complaints)))
+    const patch = pick(body, PATCH_COLS.complaints)
+    oneOf(patch, 'status', ['open', 'in_progress', 'resolved'], 'Status')
+    await db.execute(updateStmt('complaints', b, patch))
     return { ok: true }
   }
 
   if (a === 'feedback' && !b && method === 'POST') {
     const f = pick(body, INSERT_COLS.feedback)
+    text(f, 'message', 2000, 'Message', { nonEmpty: true, must: true })
+    if (f.message.length < 3) throw bad('Please write a little more.')
+    if (f.kind === undefined) f.kind = 'idea'
+    oneOf(f, 'kind', ['bug', 'idea', 'praise', 'other'], 'Type')
     await db.execute(insertStmt('feedback', { ...f, id: f.id || uuid(), user_id: user.id, user_email: user.email || null }))
     return { ok: true }
   }
@@ -650,6 +817,9 @@ async function route({ request, db, user, segments, url, body, env }) {
       s.id ||= uuid()
       s.email = String(s.email || '').trim().toLowerCase()
       if (!s.email) throw new HttpError(400, 'Email is required')
+      text(s, 'name', 100, 'Name')
+      const haveStaff = Number((await one(db, 'SELECT COUNT(*) AS n FROM property_staff WHERE property_id = ?', [s.property_id])).n)
+      if (haveStaff >= 30) throw new HttpError(400, 'You can add up to 30 attenders per PG.')
       if (s.email === user.email) throw new HttpError(400, 'That is your own email. Use a different email for the attender.')
       if (await one(db, 'SELECT 1 AS ok FROM property_staff WHERE property_id = ? AND lower(email) = ?', [s.property_id, s.email])) {
         throw new HttpError(409, 'This email is already added.', '23505')
@@ -725,23 +895,24 @@ async function voiceRoute({ request, db, env, segments, body }) {
 
   if (what === 'call') {
     const row = pick(body, CALL_COLS)
-    await requirePropertyExists(db, row.property_id)
+    await requirePropertyExists(db, row.property_id, env)
     await db.execute(insertStmt('calls', { ...row, id: uuid() }))
     return { ok: true }
   }
   if (what === 'complaint') {
     const row = pick(body, COMPLAINT_COLS)
-    await requirePropertyExists(db, row.property_id)
+    await requirePropertyExists(db, row.property_id, env)
     await db.execute(insertStmt('complaints', { ...row, id: uuid() }))
     return { ok: true }
   }
-  // same behaviour as the old report_leaving() database function
+  // same behaviour as the old report_leaving() database function (now always limited to ONE property)
   if (what === 'leaving') {
     const digits = (s) => String(s || '').replace(/\D/g, '').slice(-10)
     const phone = digits(body?.phone)
     if (phone.length < 10 || !/^\d{4}-\d{2}-\d{2}$/.test(body?.date || '')) throw new HttpError(400, 'phone and date (YYYY-MM-DD) are required')
-    const rows = await all(db, "SELECT id, property_id, name, phone FROM tenants WHERE status = 'active' ORDER BY created_at DESC")
-    const t = rows.find((r) => digits(r.phone) === phone && (!body.property_id || r.property_id === body.property_id))
+    await requirePropertyExists(db, body?.property_id, env)
+    const rows = await all(db, "SELECT id, property_id, name, phone FROM tenants WHERE status = 'active' AND property_id = ? ORDER BY created_at DESC", [body.property_id])
+    const t = rows.find((r) => digits(r.phone) === phone)
     if (!t) return { name: null }
     const d = new Date(body.date + 'T00:00:00Z')
     const pretty = `${String(d.getUTCDate()).padStart(2, '0')} ${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })} ${d.getUTCFullYear()}`
@@ -759,8 +930,10 @@ async function voiceRoute({ request, db, env, segments, body }) {
   }
   throw new HttpError(404, 'Not found')
 }
-async function requirePropertyExists(db, pid) {
-  if (!pid || !(await one(db, 'SELECT 1 AS ok FROM properties WHERE id = ?', [pid]))) throw new HttpError(400, 'Unknown property_id')
+// If VOICE_OWNER_ID is set (the owner's login id), the voice agent can only touch that owner's PGs.
+async function requirePropertyExists(db, pid, env = {}) {
+  const row = pid && (await one(db, 'SELECT owner_id FROM properties WHERE id = ?', [pid]))
+  if (!row || (env.VOICE_OWNER_ID && row.owner_id !== env.VOICE_OWNER_ID)) throw new HttpError(400, 'Unknown property_id')
 }
 
 // ───────────── entry point ─────────────
@@ -786,8 +959,15 @@ export async function handle({ request, db, env = {}, getUser }) {
   } catch (e) {
     if (e instanceof HttpError) return json(e.code ? { error: e.message, code: e.code } : { error: e.message }, e.status)
     const msg = String(e?.message || e)
-    // database rules (CHECK / FOREIGN KEY / UNIQUE / NOT NULL) -> a clear 400 for the app
-    if (/constraint|SQLITE_CONSTRAINT/i.test(msg)) return json({ error: msg.replace(/^.*?:\s*/, ''), code: /UNIQUE/i.test(msg) ? '23505' : 'constraint' }, /UNIQUE/i.test(msg) ? 409 : 400)
+    // database rules (CHECK / FOREIGN KEY / UNIQUE / NOT NULL) -> a plain-language 400 for the app (never raw SQL text)
+    if (/constraint|SQLITE_CONSTRAINT/i.test(msg)) {
+      if (/UNIQUE/i.test(msg)) {
+        const why = /tenants\.bed_id/i.test(msg) ? BED_TAKEN().message : 'This already exists.'
+        return json({ error: why, code: '23505' }, 409)
+      }
+      if (/FOREIGN KEY/i.test(msg)) return json({ error: 'This item is linked to other records, so it cannot be changed that way.', code: 'constraint' }, 400)
+      return json({ error: 'Some of the information is not allowed. Please check it and try again.', code: 'constraint' }, 400)
+    }
     console.error('API error:', msg)
     return json({ error: 'Server error' }, 500)
   }

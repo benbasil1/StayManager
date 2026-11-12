@@ -74,3 +74,11 @@ Anything else the agent did with Supabase (checking free beds, bookings, visits)
 - Demo mode (browser-only data) now needs `VITE_DEMO_MODE=true` in `.env.local`.
 - Dates and times are stored as text; timestamps are UTC (ends in Z).
 - Revoke and recreate the Turso token if it is ever shared by mistake: `turso db tokens invalidate <db>`.
+
+## Before your first customer signs up (IMPORTANT)
+- Add the Cloudflare variable `VOICE_OWNER_ID` = your own login id (Turso: `SELECT id FROM users WHERE email='you@example.com';`).
+  Without it the voice agent refuses to answer once a second owner exists (it would otherwise see their PGs).
+  It also limits `/api/voice/*` writes to your PGs.
+- Set `AUTH_SECRET` to a long random value and keep it private.
+- Files changed in this release are in the zip: nothing to migrate. Indexes and the "one tenant per bed" rule are created automatically on first load.
+- Known limits: no "forgot password" email (reset with `turso/reset_password.mjs`), no push alerts when the app is fully closed.

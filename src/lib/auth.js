@@ -40,15 +40,10 @@ export function useAuth() {
     return { needsConfirmation: !data.session }
   }, [])
 
-  // Re-checks the current password, then sets the new one (Supabase accounts only).
+  // The server checks the current password itself, then sets the new one.
   const changePassword = useCallback(async (current, next) => {
-    if (!isSupabaseConfigured) throw new Error('Demo mode has no password. Connect Supabase to use this.')
-    const { data } = await supabase.auth.getSession()
-    const email = data.session?.user?.email
-    if (!email) throw new Error('You are signed out. Please sign in again.')
-    const { error: bad } = await supabase.auth.signInWithPassword({ email, password: current })
-    if (bad) throw new Error('Current password is incorrect.')
-    const { error } = await supabase.auth.updateUser({ password: next })
+    if (!isSupabaseConfigured) throw new Error('Demo mode has no password. Turn demo mode off to use this.')
+    const { error } = await supabase.auth.updateUser({ password: next, current_password: current })
     if (error) throw error
   }, [])
 

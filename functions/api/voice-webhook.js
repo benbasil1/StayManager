@@ -7,6 +7,8 @@
 //   VOICE_WEBHOOK_KEY      secret that must be sent as ?k=...
 //   TURSO_DATABASE_URL     libsql://xxxx.turso.io
 //   TURSO_AUTH_TOKEN       Turso auth token
+//   VOICE_OWNER_ID         REQUIRED once more than one owner uses the app: the login id of the PG owner this voice
+//                          agent works for (users.id in Turso). Keeps callers away from other owners' PGs and tenants.
 
 const TZ_MIN = 330; // IST
 const SHARING = { 1: 'single', 2: 'double', 3: 'triple', 4: 'four' };
@@ -127,6 +129,14 @@ async function sql(env, stmt, args = []) {
   });
 }
 
+// Which owner's PGs this voice agent may see. With several owners signed up, VOICE_OWNER_ID must be set.
+async function ownerScope(env) {
+  if (env.VOICE_OWNER_ID) return str(env.VOICE_OWNER_ID);
+  const r = await sql(env, 'SELECT COUNT(DISTINCT owner_id) AS n FROM properties');
+  if (Number(r[0] && r[0].n) > 1) throw new Error('VOICE_OWNER_ID is not set but more than one owner exists');
+  return null;
+}
+
 // ---------------------------------------------------------------- date helpers (IST)
 
 function todayIST() {
@@ -177,7 +187,10 @@ function splitAliases(a) {
 }
 
 async function resolvePg(env, pgName) {
-  const props = await sql(env, 'SELECT * FROM properties ORDER BY name');
+  const owner = await ownerScope(env);
+  const props = owner
+    ? await sql(env, 'SELECT * FROM properties WHERE owner_id = ? ORDER BY name', [owner])
+    : await sql(env, 'SELECT * FROM properties ORDER BY name');
   if (!props.length) return { ask: 'No PG is set up in the system. Tell the caller the team will follow up.' };
   const list = props.map((p) => `"${p.name}"`).join(' or ');
   const input = compact(pgName);
@@ -522,6 +535,7 @@ async function reserve_bed(env, body) {
 // ---------------------------------------------------------------- residents
 
 async function findTenants(env, phone10) {
+  const owner = await ownerScope(env);
   return sql(
     env,
     `SELECT t.id, t.property_id, t.name, t.phone, t.rent_amount, t.deposit, t.move_in, t.due_day, t.leaving_on,
@@ -531,8 +545,9 @@ async function findTenants(env, phone10) {
      LEFT JOIN beds b ON b.id = t.bed_id
      LEFT JOIN rooms r ON r.id = b.room_id
      WHERE t.status = 'active'
-       AND (${dcol('t.phone')} LIKE ? OR ${dcol('t.whatsapp')} LIKE ?)`,
-    ['%' + phone10, '%' + phone10]
+       AND (${dcol('t.phone')} LIKE ? OR ${dcol('t.whatsapp')} LIKE ?)
+       AND (? IS NULL OR p.owner_id = ?)`,
+    ['%' + phone10, '%' + phone10, owner, owner]
   );
 }
 
@@ -705,10 +720,11 @@ async function check_complaint_status(env, body) {
   const names = [...new Set(tenants.map((t) => str(t.name).toLowerCase()).filter(Boolean))];
   const pids = [...new Set(tenants.map((t) => t.property_id))];
 
+  const owner = await ownerScope(env);
   let sqlText = `SELECT c.message, c.category, c.priority, c.kind, c.status, c.created_at, p.name AS pg_name
                  FROM complaints c JOIN properties p ON p.id = c.property_id
-                 WHERE (${dcol("COALESCE(c.caller_phone,'')")} LIKE ?`;
-  const args = ['%' + l];
+                 WHERE (? IS NULL OR p.owner_id = ?) AND (${dcol("COALESCE(c.caller_phone,'')")} LIKE ?`;
+  const args = [owner, owner, '%' + l];
   if (names.length && pids.length) {
     sqlText += ` OR (c.property_id IN (${pids.map(() => '?').join(',')}) AND lower(c.tenant_name) IN (${names.map(() => '?').join(',')}))`;
     args.push(...pids, ...names);

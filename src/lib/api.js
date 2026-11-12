@@ -43,6 +43,9 @@ export async function loadPropertyData(propertyId) {
   }
 }
 
+// tiny "did anything change?" check used by the background refresh
+export const loadPulse = (propertyId) => call('GET', `/properties/${propertyId}/pulse`)
+
 export const createProperty = (row) => call('POST', '/properties', row)
 
 export const insertRoom = (room) => call('POST', '/rooms', room) // room includes its beds

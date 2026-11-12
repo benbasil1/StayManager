@@ -8,6 +8,7 @@ const ITERATIONS = 100000
 const SESSION_DAYS = 30
 const MAX_FAILS = 8 // wrong passwords allowed per email ...
 const FAIL_WINDOW_MIN = 15 // ... within this many minutes
+const MAX_SIGNUPS_PER_IP = 10 // new accounts allowed from one network address per hour (stops bots)
 const enc = new TextEncoder()
 
 const b64u = {
@@ -108,9 +109,21 @@ export async function authRoute({ request, db, env, segments, body }) {
     const email = cleanEmail(body?.email)
     checkEmail(email)
     checkPassword(body?.password)
+    // limit how many accounts one network address can create per hour
+    const ipKey = 'signup:' + (request.headers.get('cf-connecting-ip') || 'unknown')
+    const hourAgo = new Date(Date.now() - 3600000).toISOString()
+    const made = await rowOf(db, 'SELECT COUNT(*) AS n FROM login_fails WHERE email = ? AND at > ?', [ipKey, hourAgo])
+    if (Number(made?.n) >= MAX_SIGNUPS_PER_IP) throw new HttpError(429, 'Too many accounts created from this connection. Please try again later.')
     if (await rowOf(db, 'SELECT 1 AS ok FROM users WHERE email = ?', [email])) throw new HttpError(409, 'This email is already registered. Please sign in.')
     const user = { id: crypto.randomUUID(), email }
-    await db.execute({ sql: 'INSERT INTO users (id, email, password_hash) VALUES (?,?,?)', args: [user.id, email, await hashPassword(body.password)] })
+    await db.batch(
+      [
+        { sql: 'INSERT INTO users (id, email, password_hash) VALUES (?,?,?)', args: [user.id, email, await hashPassword(body.password)] },
+        { sql: 'INSERT INTO login_fails (email, at) VALUES (?,?)', args: [ipKey, new Date().toISOString()] },
+        { sql: 'DELETE FROM login_fails WHERE at < ?', args: [new Date(Date.now() - 86400000).toISOString()] }, // tidy up old rows
+      ],
+      'write'
+    )
     return session(user, env)
   }
 
@@ -123,7 +136,13 @@ export async function authRoute({ request, db, env, segments, body }) {
     // always run the hash so a missing account takes as long as a wrong password
     const good = await verifyPassword(String(body?.password || ''), u?.password_hash || 'x.x')
     if (!u || !good) {
-      await db.execute({ sql: 'INSERT INTO login_fails (email, at) VALUES (?,?)', args: [email, new Date().toISOString()] })
+      await db.batch(
+        [
+          { sql: 'INSERT INTO login_fails (email, at) VALUES (?,?)', args: [email, new Date().toISOString()] },
+          { sql: 'DELETE FROM login_fails WHERE at < ?', args: [new Date(Date.now() - 86400000).toISOString()] },
+        ],
+        'write'
+      )
       throw new HttpError(401, 'Wrong email or password.')
     }
     await db.execute({ sql: 'DELETE FROM login_fails WHERE email = ?', args: [email] })
@@ -135,7 +154,8 @@ export async function authRoute({ request, db, env, segments, body }) {
     checkPassword(body?.new_password)
     const u = await rowOf(db, 'SELECT password_hash FROM users WHERE id = ?', [user.id])
     if (!u) throw new HttpError(401, 'Session expired. Please sign in again.')
-    if (body?.current_password !== undefined && !(await verifyPassword(String(body.current_password), u.password_hash))) throw new HttpError(401, 'Current password is wrong.')
+    // the current password is always required, so a stolen login token alone can never change the password
+    if (typeof body?.current_password !== 'string' || !(await verifyPassword(body.current_password, u.password_hash))) throw new HttpError(401, 'Current password is incorrect.')
     await db.execute({ sql: 'UPDATE users SET password_hash = ? WHERE id = ?', args: [await hashPassword(body.new_password), user.id] })
     return { ok: true }
   }

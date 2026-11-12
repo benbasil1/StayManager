@@ -1,20 +1,23 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useAuth } from './lib/auth'
 import { isSupabaseConfigured } from './lib/supabase'
 import * as api from './lib/api'
-import StaffApp from './components/StaffApp'
 import { DataProvider, useData } from './lib/store'
 import Icon from './components/Icon'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import Rooms from './components/Rooms'
 import Inbox from './components/Inbox'
-import Assistant from './components/Assistant'
-import Settings from './components/Settings'
 import Toasts from './components/Toasts'
-import ReportPage from './components/ReportPage'
 import WhatsAppPrompts from './components/WhatsAppPrompts'
 import { useInboxAlerts } from './lib/notify'
+
+// Screens that are not needed on first open load only when used (smaller first download = faster start on phones)
+const Assistant = lazy(() => import('./components/Assistant'))
+const Settings = lazy(() => import('./components/Settings'))
+const StaffApp = lazy(() => import('./components/StaffApp'))
+const ReportPage = lazy(() => import('./components/ReportPage'))
+const Loading = ({ text = 'Loading…' }) => <div className="center-screen">{text}</div>
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -53,9 +56,25 @@ function Shell({ auth }) {
 
   const onNav = (id) => (id === 'inbox' ? openInbox() : go(id))
 
-  if (data.loading) return <div className="center-screen">Loading your PG…</div>
+  if (data.loading) return <Loading text="Loading your PG…" />
 
-  // Signed in but no PG created yet (Supabase mode)
+  // The server could not be reached: say so (never show "Add your first PG" for a failed load)
+  if (!data.property && data.error) {
+    return (
+      <div className="login-wrap">
+        <div className="login-card">
+          <h1>Could not load your PG</h1>
+          <p className="muted">{data.error}</p>
+          <div className="login-form">
+            <button className="btn primary block" onClick={() => { data.clearError(); data.reload() }}>Try again</button>
+            <button type="button" className="link" onClick={auth.signOut}>Sign out</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Signed in but no PG created yet
   if (!data.property) {
     return (
       <div className="login-wrap">
@@ -128,8 +147,10 @@ function Shell({ auth }) {
           {tab === 'dashboard' && <Dashboard go={go} openCalls={openCalls} openComplaints={openComplaints} />}
           {tab === 'rooms' && <Rooms />}
           {tab === 'inbox' && <Inbox tab={inboxTab} setTab={setInboxTab} complaintFilter={complaintFilter} />}
-          {tab === 'assistant' && <Assistant />}
-          {tab === 'settings' && <Settings auth={auth} />}
+          <Suspense fallback={<Loading />}>
+            {tab === 'assistant' && <Assistant />}
+            {tab === 'settings' && <Settings auth={auth} />}
+          </Suspense>
         </div>
       </main>
 
@@ -159,8 +180,8 @@ function RoleGate({ auth }) {
     api.myRole().then((r) => on && setRole(r)).catch(() => on && setRole('owner'))
     return () => { on = false }
   }, [])
-  if (!role) return <div className="center-screen">Loading…</div>
-  if (role === 'staff') return <StaffApp auth={auth} />
+  if (!role) return <Loading />
+  if (role === 'staff') return <Suspense fallback={<Loading />}><StaffApp auth={auth} /></Suspense>
   return (
     <DataProvider>
       <Shell auth={auth} />
@@ -168,12 +189,22 @@ function RoleGate({ auth }) {
   )
 }
 
-export default function App() {
-  // public QR page for tenants: works without any login
-  const report = window.location.hash.match(/^#\/report\/([\w-]+)/)
-  if (report) return <ReportPage code={report[1]} />
+function SignedInApp() {
   const auth = useAuth()
-  if (!auth.ready) return <div className="center-screen">Loading…</div>
+  if (!auth.ready) return <Loading />
   if (!auth.session) return <Login auth={auth} />
   return <RoleGate key={auth.session.email} auth={auth} />
+}
+
+export default function App() {
+  const [hash, setHash] = useState(window.location.hash)
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash)
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  // public QR page for tenants: works without any login
+  const report = hash.match(/^#\/report\/([\w-]+)/)
+  if (report) return <Suspense fallback={<Loading />}><ReportPage code={report[1]} /></Suspense>
+  return <SignedInApp />
 }

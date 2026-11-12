@@ -101,7 +101,7 @@ function FeedbackForm({ auth }) {
     if (text.length < 3) return setMsg({ type: 'err', text: 'Please write a few words first.' })
     if (!isSupabaseConfigured) {
       if (mailto) window.location.href = mailto
-      else setMsg({ type: 'err', text: 'Demo mode cannot send feedback. Connect Supabase to use this.' })
+      else setMsg({ type: 'err', text: 'Demo mode cannot send feedback. Sign in to a live account to use this.' })
       return
     }
     setBusy(true)

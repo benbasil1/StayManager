@@ -38,14 +38,16 @@ export function fmtDuration(sec = 0) {
   return m ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`
 }
 
+// Indian style: 12/11/2026 (day first), 7:33 pm
 export function fmtDateTime(iso) {
   const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}, ${d.toLocaleTimeString('en-US')}`
+  if (Number.isNaN(d.getTime())) return '-'
+  return `${d.toLocaleDateString('en-IN')}, ${d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}`
 }
 
 export function fmtDate(iso) {
   const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-IN')
 }
 
 // ---------- plain dates (YYYY-MM-DD) ----------
@@ -92,7 +94,8 @@ export function rentSummary(tenant, payments) {
   let m = start.getMonth()
   while (y < today.getFullYear() || (y === today.getFullYear() && m <= today.getMonth())) {
     const daysInMonth = new Date(y, m + 1, 0).getDate()
-    dueDates.push(new Date(y, m, Math.min(dueDay, daysInMonth)))
+    const due = new Date(y, m, Math.min(dueDay, daysInMonth))
+    dueDates.push(due < start ? start : due) // rent can't be due before the tenant moved in
     m += 1
     if (m > 11) { m = 0; y += 1 }
   }

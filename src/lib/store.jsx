@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { isSupabaseConfigured } from './supabase'
 import * as api from './api'
 import { buildDemoDb } from './demoData'
@@ -10,11 +10,18 @@ const PROPERTY_KEY = 'sm_property'
 const Ctx = createContext(null)
 export const useData = () => useContext(Ctx)
 
+// localStorage can throw (private mode, blocked storage): never let that break the app
+const store = {
+  get: (k) => { try { return localStorage.getItem(k) } catch { return null } },
+  set: (k, v) => { try { localStorage.setItem(k, v) } catch { /* ignore */ } },
+  del: (k) => { try { localStorage.removeItem(k) } catch { /* ignore */ } },
+}
+
 const EMPTY = { properties: [], rooms: [], complaints: [], calls: [], tenants: [], payments: [] }
 
 function loadDemo() {
   try {
-    const raw = localStorage.getItem(DEMO_KEY)
+    const raw = store.get(DEMO_KEY)
     if (raw) return JSON.parse(raw)
   } catch {
     /* ignore corrupted storage */
@@ -25,12 +32,14 @@ function loadDemo() {
 export function DataProvider({ children }) {
   const demo = !isSupabaseConfigured
   const [db, setDb] = useState(() => (demo ? loadDemo() : EMPTY))
-  const [propertyId, setPropertyId] = useState(() => localStorage.getItem(PROPERTY_KEY))
+  const [propertyId, setPropertyId] = useState(() => store.get(PROPERTY_KEY))
   const [loading, setLoading] = useState(!demo)
   const [error, setError] = useState('')
   const [reportCode, setReportCode] = useState('')
   const [welcomeId, setWelcomeId] = useState(null) // tenant just added: offer the WhatsApp welcome
   const [removal, setRemoval] = useState([]) // tenants who left but are still in the WhatsApp group
+  const seq = useRef(0) // counts changes made on this screen, so an older background refresh can never undo them
+  const pulseRef = useRef(null) // fingerprint of the calls/complaints we last loaded
 
   // ---- keep a valid selected property (demo mode) ----
   useEffect(() => {
@@ -39,24 +48,28 @@ export function DataProvider({ children }) {
   }, [demo, db.properties, propertyId])
 
   useEffect(() => {
-    if (propertyId) localStorage.setItem(PROPERTY_KEY, propertyId)
+    if (propertyId) store.set(PROPERTY_KEY, propertyId)
   }, [propertyId])
 
   // ---- persist demo data in the browser ----
   useEffect(() => {
-    if (demo) localStorage.setItem(DEMO_KEY, JSON.stringify(db))
+    if (demo) store.set(DEMO_KEY, JSON.stringify(db))
   }, [demo, db])
 
   // ---- load everything from the server (silent = background refresh, no error banner) ----
   const reload = useCallback(async (silent = false) => {
     if (demo) return
+    const startedAt = seq.current
     try {
       const properties = await api.loadProperties()
       let pid = propertyId
       if (!properties.some((p) => p.id === pid)) pid = properties[0]?.id || null
-      const data = pid
+      const { pulse, ...data } = pid
         ? await api.loadPropertyData(pid)
         : { rooms: [], complaints: [], calls: [], tenants: [], payments: [] }
+      // a background refresh that started before the user changed something would put the old data back: drop it
+      if (silent === true && startedAt !== seq.current) return
+      pulseRef.current = pulse ? pulse.v : null
       setDb({ properties, ...data })
       if (pid !== propertyId) setPropertyId(pid)
     } catch (e) {
@@ -78,12 +91,28 @@ export function DataProvider({ children }) {
     return () => { on = false }
   }, [demo, propertyId])
 
-  // ---- new calls / complaints appear within 15 seconds (Turso has no realtime, so we check regularly) ----
+  // ---- new calls / complaints appear within about 15 seconds ----
+  // Turso has no realtime, so we ask a tiny "did anything change?" question every 15 seconds and only reload
+  // everything when the answer is yes (plus a full refresh every 2 minutes to pick up edits from another phone).
   useEffect(() => {
     if (demo || !propertyId) return
-    const tick = () => { if (document.visibilityState === 'visible') reload(true) }
+    let ticks = 0
+    let busy = false
+    const tick = async () => {
+      if (document.visibilityState !== 'visible' || busy) return
+      busy = true
+      ticks += 1
+      try {
+        const { v } = await api.loadPulse(propertyId)
+        if (v !== pulseRef.current || ticks % 8 === 0) await reload(true)
+      } catch {
+        /* offline or server busy: try again next time */
+      } finally {
+        busy = false
+      }
+    }
     const timer = setInterval(tick, 15000)
-    document.addEventListener('visibilitychange', tick) // refresh right away when the app comes back to the front
+    document.addEventListener('visibilitychange', tick) // check right away when the app comes back to the front
     return () => {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', tick)
@@ -122,13 +151,16 @@ export function DataProvider({ children }) {
   // ---- optimistic update + remote write (rolls back by reloading on error) ----
   const mutate = useCallback(
     async (apply, remote) => {
+      seq.current += 1
       setDb(apply)
-      if (demo) return
+      if (demo) return true
       try {
         await remote()
+        return true
       } catch (e) {
         setError(e.message || 'Something went wrong')
         reload()
+        return false
       }
     },
     [demo, reload]
@@ -187,13 +219,12 @@ export function DataProvider({ children }) {
     async addTenant(roomId, bedId, form, files = []) {
       const tenant = { id: uid(), property_id: propertyId, bed_id: bedId, status: 'active', ...form }
       setWelcomeId(tenant.id)
-      await mutate(
+      // the server saves the tenant and marks the bed occupied in one step
+      const saved = await mutate(
         (d) => ({ ...setOccupied(roomId, bedId, true)(d), tenants: [...d.tenants, tenant] }),
-        async () => {
-          await api.insertTenant(tenant)
-          await api.setBedOccupied(bedId, true)
-        }
+        () => api.insertTenant(tenant)
       )
+      if (!saved) { setWelcomeId(null); return }
       // ID proof picked in the form: upload after the tenant exists, then link the files to the tenant
       if (files.length) {
         const paths = []
@@ -220,10 +251,7 @@ export function DataProvider({ children }) {
           const next = { ...d, tenants: d.tenants.map((t) => (t.id === tenant.id ? { ...t, ...patch } : t)) }
           return row ? setOccupied(row.room.id, tenant.bed_id, false)(next) : next
         },
-        async () => {
-          await api.patchTenant(tenant.id, patch)
-          if (row) await api.setBedOccupied(tenant.bed_id, false)
-        }
+        () => api.patchTenant(tenant.id, patch) // the server frees the bed in the same step
       )
     },
 
@@ -261,8 +289,8 @@ export function DataProvider({ children }) {
       if (proofFile) {
         try { payment.proof_path = await addIdDoc(tenantId, proofFile) } catch (e) { uploadError = e.message || 'Screenshot upload failed' }
       }
-      await mutate((d) => ({ ...d, payments: [...d.payments, payment] }), () => api.insertPayment(payment))
-      if (uploadError) setError(`Payment saved, but the screenshot was not uploaded: ${uploadError}`)
+      const saved = await mutate((d) => ({ ...d, payments: [...d.payments, payment] }), () => api.insertPayment(payment))
+      if (saved && uploadError) setError(`Payment saved, but the screenshot was not uploaded: ${uploadError}`)
     },
     // Add or replace the screenshot on an existing payment
     async setPaymentProof(payment, file) {
@@ -317,7 +345,7 @@ export function DataProvider({ children }) {
       }
     },
     resetDemo() {
-      localStorage.removeItem(DEMO_KEY)
+      store.del(DEMO_KEY)
       setDb(buildDemoDb())
     },
     reload,

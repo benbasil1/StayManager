@@ -316,6 +316,13 @@ export function DataProvider({ children }) {
       )
     },
 
+    markComplaintNotified(id, status) {
+      mutate(
+        (d) => ({ ...d, complaints: d.complaints.map((c) => (c.id === id ? { ...c, notified_status: status } : c)) }),
+        () => api.setComplaintNotified(id, status)
+      )
+    },
+
     // ----- PGs -----
     async addProperty(name) {
       if (demo) {

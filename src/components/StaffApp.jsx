@@ -1,6 +1,7 @@
 // Attender (staff) view: Complaints and Calls tabs only, each with Call / WhatsApp buttons. No rent, payments or ID proofs.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Icon from './Icon'
+import NotifyTenant from './NotifyTenant'
 import Toasts from './Toasts'
 import * as api from '../lib/api'
 import { useInboxAlerts } from '../lib/notify'
@@ -41,7 +42,7 @@ function ContactButtons({ phone, whatsapp }) {
   )
 }
 
-function Complaints({ complaints, contacts, setStatus }) {
+function Complaints({ complaints, contacts, setStatus, markNotified, pgName }) {
   const [filter, setFilter] = useState('all')
   const list = complaints.filter((c) => filter === 'all' || c.status === filter)
   return (
@@ -74,6 +75,7 @@ function Complaints({ complaints, contacts, setStatus }) {
                   </button>
                 ))}
               </div>
+              <NotifyTenant complaint={c} phone={(contact && contact.whatsapp) || phone} pgName={pgName} onSent={markNotified} />
               <ContactButtons phone={phone} whatsapp={contact && contact.whatsapp} />
             </div>
           )
@@ -155,6 +157,16 @@ export default function StaffApp({ auth }) {
     }
   }
 
+  const markNotified = async (id, status) => {
+    setData((d) => ({ ...d, complaints: d.complaints.map((c) => (c.id === id ? { ...c, notified_status: status } : c)) }))
+    try {
+      await api.staffSetComplaintNotified(id, status)
+    } catch (e) {
+      setError(e.message || 'Could not save')
+      load(false)
+    }
+  }
+
   if (loading) return <div className="center-screen">Loading…</div>
 
   return (
@@ -200,7 +212,7 @@ export default function StaffApp({ auth }) {
           {property && tab === 'complaints' && (
             <div className="inbox-page">
               <h2 className="page-title">Complaints</h2>
-              <Complaints complaints={complaints} contacts={contacts} setStatus={setStatus} />
+              <Complaints complaints={complaints} contacts={contacts} setStatus={setStatus} markNotified={markNotified} pgName={property && property.name} />
             </div>
           )}
           {property && tab === 'calls' && (

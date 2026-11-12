@@ -65,6 +65,7 @@ export const patchPayment = (id, patch) => call('PATCH', `/payments/${id}`, patc
 export const removePayment = (id) => call('DELETE', `/payments/${id}`)
 
 export const setComplaintStatus = (id, status) => call('PATCH', `/complaints/${id}`, { status })
+export const setComplaintNotified = (id, status) => call('PATCH', `/complaints/${id}`, { notified_status: status })
 
 export const loadSampleData = () => call('POST', '/seed')
 
@@ -112,6 +113,7 @@ export const deleteFile = (path) => call('DELETE', `/files/${encodeURIComponent(
 export const myRole = () => call('GET', '/role')
 export const loadStaffData = () => call('GET', '/staff/load')
 export const staffSetComplaintStatus = (id, status) => call('PATCH', `/staff/complaints/${id}`, { status })
+export const staffSetComplaintNotified = (id, status) => call('PATCH', `/staff/complaints/${id}`, { notified_status: status })
 export const loadStaff = (propertyId) => call('GET', `/staff?property_id=${encodeURIComponent(propertyId)}`)
 export const addStaff = (row) => call('POST', '/staff', row)
 export const removeStaff = (id) => call('DELETE', `/staff/${id}`)

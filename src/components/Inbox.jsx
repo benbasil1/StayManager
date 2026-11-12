@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useData } from '../lib/store'
 import TenantDrawer from './TenantDrawer'
 import Icon from './Icon'
+import NotifyTenant from './NotifyTenant'
 import { fmtDate, fmtDateTime, fmtDuration, intentLabel, kindLabel, statusLabel, waLink } from '../lib/utils'
 
 const FILTERS = ['all', 'open', 'in_progress', 'resolved']
@@ -37,7 +38,7 @@ function ContactButtons({ phone, whatsapp }) {
 }
 
 function Complaints({ initialFilter }) {
-  const { complaints, setComplaintStatus, tenantRows } = useData()
+  const { complaints, setComplaintStatus, markComplaintNotified, tenantRows, property } = useData()
   const [filter, setFilter] = useState(initialFilter)
   const [openTenantId, setOpenTenantId] = useState(null)
   const openRow = openTenantId && tenantRows.find((r) => r.tenant.id === openTenantId)
@@ -78,6 +79,7 @@ function Complaints({ initialFilter }) {
                 </button>
               )}
             </div>
+            <NotifyTenant complaint={c} phone={(row && row.tenant.whatsapp) || phone} pgName={property && property.name} onSent={markComplaintNotified} />
             <ContactButtons phone={phone} whatsapp={row && row.tenant.whatsapp} />
           </div>
           )

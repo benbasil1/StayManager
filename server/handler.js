@@ -39,7 +39,7 @@ const PATCH_COLS = {
   beds: ['label', 'occupied', 'vacant_since'],
   tenants: TENANT_COLS,
   payments: ['amount', 'paid_on', 'for_month', 'method', 'note', 'proof_path'],
-  complaints: ['status'],
+  complaints: ['status', 'notified_status'],
 }
 const CALL_COLS = ['property_id', 'caller_name', 'summary', 'intent', 'sentiment', 'duration_seconds', 'caller_phone', 'call_id', 'transcript', 'needs_follow_up', 'flags']
 const COMPLAINT_COLS = ['property_id', 'tenant_name', 'message', 'category', 'priority', 'kind', 'status', 'caller_phone', 'notified_status']
@@ -278,9 +278,20 @@ function cleanPhone(v, label) {
   return d
 }
 
+// "Tenant informed" marker on a complaint: which status the tenant was last told about (set when someone taps the WhatsApp button).
+let notifyReady = false
+async function ensureNotifyColumn(db) {
+  if (notifyReady) return
+  try { await db.execute('ALTER TABLE complaints ADD COLUMN notified_status TEXT') } catch (e) {
+    if (!/duplicate column/i.test(String(e?.message || e))) throw e
+  }
+  notifyReady = true
+}
+
 // ───────────── handlers ─────────────
 async function loadProperties(db, user) {
   await ensureWaColumns(db)
+  await ensureNotifyColumn(db)
   await ensurePhoneColumns(db)
   await ensureIndexes(db)
   return all(db, 'SELECT * FROM properties WHERE owner_id = ? ORDER BY created_at', [user.id])
@@ -814,6 +825,9 @@ async function route({ request, db, user, segments, url, body, env }) {
     await requireOwnerOfRow(db, user, 'complaints', b)
     const patch = pick(body, PATCH_COLS.complaints)
     oneOf(patch, 'status', ['open', 'in_progress', 'resolved'], 'Status')
+    oneOf(patch, 'notified_status', ['in_progress', 'resolved'], 'Notified status')
+    if (!Object.keys(patch).length) throw bad('Nothing to update.')
+    await ensureNotifyColumn(db)
     await db.execute(updateStmt('complaints', b, patch))
     return { ok: true }
   }
@@ -834,8 +848,19 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (b === 'complaints' && c && method === 'PATCH') {
       const pid = await propertyOfRow(db, 'complaints', c)
       if (!(await isStaffOf(db, user, pid))) throw FORBIDDEN()
-      if (!['open', 'in_progress', 'resolved'].includes(body?.status)) throw new HttpError(400, 'Invalid status')
-      await db.execute({ sql: 'UPDATE complaints SET status = ? WHERE id = ?', args: [body.status, c] })
+      const sets = []
+      const args = []
+      if (body?.status !== undefined) {
+        if (!['open', 'in_progress', 'resolved'].includes(body.status)) throw new HttpError(400, 'Invalid status')
+        sets.push('status = ?'); args.push(body.status)
+      }
+      if (body?.notified_status !== undefined) {
+        if (!['in_progress', 'resolved'].includes(body.notified_status)) throw new HttpError(400, 'Invalid status')
+        await ensureNotifyColumn(db)
+        sets.push('notified_status = ?'); args.push(body.notified_status)
+      }
+      if (!sets.length) throw new HttpError(400, 'Nothing to update.')
+      await db.execute({ sql: `UPDATE complaints SET ${sets.join(', ')} WHERE id = ?`, args: [...args, c] })
       return { ok: true }
     }
     // owner manages attenders

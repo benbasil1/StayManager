@@ -66,6 +66,23 @@ export function waLink(phone, text) {
   return `https://wa.me/${num}` + (text ? `?text=${encodeURIComponent(text)}` : '')
 }
 
+// Wording of the WhatsApp message that tells a tenant their complaint changed status.
+// To change the wording, edit the sentences below. The sender can also edit the text in WhatsApp before pressing Send.
+export function complaintUpdateText({ complaint, status, pgName }) {
+  const raw = String(complaint.message || '')
+  const room = (raw.match(/\(Room\s+([^)]+)\)/i) || [])[1]
+  let issue = raw.replace(/^\[Not matched to a tenant\]\s*/i, '').replace(/^\(Room\s+[^)]+\)\s*/i, '').replace(/\s+/g, ' ').trim()
+  if (issue.length > 70) issue = issue.slice(0, 67).trimEnd() + '…'
+  const name = String(complaint.tenant_name || '').trim()
+  const first = !name || /^unverified tenant$/i.test(name) ? '' : name.split(/\s+/)[0]
+  const about = issue ? `your complaint about “${issue}”` : 'your complaint'
+  const where = room ? ` (Room ${room.trim()})` : ''
+  const tail = status === 'resolved'
+    ? 'has been marked as resolved ✅. If the problem is still there, please reply and tell us.'
+    : 'is now being worked on. We will update you once it is fixed.'
+  return `${first ? `Hi ${first},` : 'Hello,'} ${about}${where} ${tail}` + (pgName ? `\n– ${pgName}` : '')
+}
+
 // Link people open from the QR on the wall (also used in the welcome message)
 export const reportUrl = (code) => `${String(import.meta.env.VITE_PUBLIC_URL || window.location.origin).replace(/\/+$/, '')}/#/report/${code}`
 

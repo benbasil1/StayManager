@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabase'
 import { usePrefs, setPref } from '../lib/prefs'
 import QRCode from 'qrcode'
-import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, resetStaffPassword, sendFeedback, sendPhoneCode, verifyPhoneCode } from '../lib/api'
+import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, resetStaffPassword, sendFeedback, setPropertyPhones } from '../lib/api'
 import { posterHtml } from '../lib/poster'
 import { useData } from '../lib/store'
 import { alertsPref, browserAlertsSupported, setAlertsPref } from '../lib/notify'
@@ -166,96 +166,48 @@ function MyPgs() {
   )
 }
 
-function PhoneRow({ which, label }) {
-  const { property, reload } = useData()
+function ContactCard() {
+  const { property, demo, reload } = useData()
   const pid = property && property.id
-  const saved = (property && property[`${which}_phone`]) || ''
-  const verified = !!(property && property[`${which}_phone_verified`])
-  const [value, setValue] = useState(saved)
-  const [code, setCode] = useState('')
-  const [asking, setAsking] = useState(false)
+  const savedOwner = (property && property.owner_phone) || ''
+  const savedAttender = (property && property.attender_phone) || ''
+  const [owner, setOwner] = useState(savedOwner)
+  const [attender, setAttender] = useState(savedAttender)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState({ type: '', text: '' })
-  useEffect(() => { setValue(saved); setAsking(false); setCode('') }, [saved, pid])
+  useEffect(() => { setOwner(savedOwner); setAttender(savedAttender) }, [savedOwner, savedAttender, pid])
   useEffect(() => { setMsg({ type: '', text: '' }) }, [pid])
 
   const digits = (v) => String(v || '').replace(/\D/g, '').slice(-10)
-  const unchanged = digits(value) === digits(saved) && (verified || !saved)
+  const unchanged = digits(owner) === digits(savedOwner) && digits(attender) === digits(savedAttender)
 
-  async function send(e) {
+  async function save(e) {
     e.preventDefault()
     setMsg({ type: '', text: '' })
     setBusy(true)
     try {
-      const r = await sendPhoneCode(pid, which, value)
-      if (r.sent) {
-        setAsking(true)
-        setMsg({ type: 'ok', text: 'We sent a 6-digit code by SMS to this number. Enter it below.' })
-      } else {
-        await reload(true)
-        setMsg({ type: 'ok', text: r.cleared ? 'Number removed.' : 'Saved. SMS verification is not switched on yet, so this number shows as not verified.' })
-      }
-    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not send the code' }) }
-    setBusy(false)
-  }
-  async function confirm(e) {
-    e.preventDefault()
-    setMsg({ type: '', text: '' })
-    setBusy(true)
-    try {
-      await verifyPhoneCode(pid, which, code)
+      await setPropertyPhones(pid, owner, attender)
       await reload(true)
-      setAsking(false)
-      setCode('')
-      setMsg({ type: 'ok', text: 'Number verified.' })
-    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not verify the code' }) }
+      setMsg({ type: 'ok', text: 'Saved. These numbers will print on your QR poster.' })
+    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not save' }) }
     setBusy(false)
   }
 
-  return (
-    <div style={{ marginBottom: 18 }}>
-      <form className="login-form" style={{ marginTop: 0 }} onSubmit={asking ? confirm : send}>
-        <label>
-          {label}
-          {saved && <span style={{ marginLeft: 8, fontWeight: 600, fontSize: '0.85em', color: verified ? 'var(--ok, #1f8a4c)' : 'var(--muted, #777)' }}>{verified ? '✓ Verified' : 'Not verified'}</span>}
-          <input type="tel" inputMode="numeric" value={value} onChange={(e) => setValue(e.target.value)} placeholder="10-digit mobile number" autoComplete="off" disabled={asking} />
-        </label>
-        {asking && (
-          <label>SMS code
-            <input inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} placeholder="6-digit code" autoComplete="one-time-code" autoFocus />
-          </label>
-        )}
-        {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
-        <div className="status-row">
-          {asking ? (
-            <>
-              <button className="btn primary" disabled={busy || code.length !== 6}>{busy ? 'Checking…' : 'Verify'}</button>
-              <button type="button" className="btn ghost" disabled={busy} onClick={() => { setAsking(false); setCode(''); setMsg({ type: '', text: '' }) }}>Change number</button>
-            </>
-          ) : (
-            <button className="btn primary" disabled={busy || unchanged}>{busy ? 'Please wait…' : !value.trim() && saved ? 'Remove number' : 'Save and verify'}</button>
-          )}
-        </div>
-      </form>
-    </div>
-  )
-}
-
-function ContactCard() {
-  const { demo } = useData()
   return (
     <>
       <SectionHead
         title="Contact numbers (for the QR poster)"
-        info={<p className="muted">These two numbers are printed on the QR poster under “Urgent? Call us directly”, so tenants can phone you or your attender. We send a 6-digit SMS code to each number to confirm it is real. Leave a box empty to leave that number off the poster.</p>}
+        info={<p className="muted">These two numbers are printed on the QR poster under “Urgent? Call us directly”, so tenants can phone you or your attender. Leave a box empty to leave that number off the poster.</p>}
       />
       {demo ? (
-        <p className="muted">Demo mode cannot send SMS. Connect your server to use this.</p>
+        <p className="muted">Demo mode cannot save numbers. Connect your server to use this.</p>
       ) : (
-        <>
-          <PhoneRow which="owner" label="Owner number" />
-          <PhoneRow which="attender" label="Attender number" />
-        </>
+        <form className="login-form" style={{ marginTop: 0 }} onSubmit={save}>
+          <label>Owner number<input type="tel" inputMode="numeric" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="10-digit mobile number" autoComplete="off" /></label>
+          <label>Attender number<input type="tel" inputMode="numeric" value={attender} onChange={(e) => setAttender(e.target.value)} placeholder="10-digit mobile number" autoComplete="off" /></label>
+          {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
+          <button className="btn primary" disabled={busy || unchanged}>{busy ? 'Saving…' : 'Save numbers'}</button>
+        </form>
       )}
     </>
   )

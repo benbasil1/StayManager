@@ -117,11 +117,8 @@ export const addStaff = (row) => call('POST', '/staff', row)
 export const removeStaff = (id) => call('DELETE', `/staff/${id}`)
 export const resetStaffPassword = (id, password) => call('PATCH', `/staff/${id}`, { password })
 
+export const setPropertyPhones = (propertyId, ownerPhone, attenderPhone) => call('PATCH', `/properties/${propertyId}`, { owner_phone: ownerPhone || '', attender_phone: attenderPhone || '' })
 export const setPropertyWaLink = (propertyId, link) => call('PATCH', `/properties/${propertyId}`, { wa_group_link: link || '' })
-
-// ----- owner / attender phone numbers (SMS verified) -----
-export const sendPhoneCode = (propertyId, which, phone) => call('POST', `/properties/${propertyId}/phone`, { which, phone })
-export const verifyPhoneCode = (propertyId, which, code) => call('POST', `/properties/${propertyId}/phone/verify`, { which, code })
 
 // ----- complaint QR -----
 export const getReportCode = (propertyId) => call('GET', `/properties/${propertyId}/qr`)

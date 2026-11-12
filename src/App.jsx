@@ -17,6 +17,7 @@ const Assistant = lazy(() => import('./components/Assistant'))
 const Settings = lazy(() => import('./components/Settings'))
 const StaffApp = lazy(() => import('./components/StaffApp'))
 const ReportPage = lazy(() => import('./components/ReportPage'))
+const ResetPassword = lazy(() => import('./components/ResetPassword'))
 const Loading = ({ text = 'Loading…' }) => <div className="center-screen">{text}</div>
 
 const TABS = [
@@ -206,5 +207,8 @@ export default function App() {
   // public QR page for tenants: works without any login
   const report = hash.match(/^#\/report\/([\w-]+)/)
   if (report) return <Suspense fallback={<Loading />}><ReportPage code={report[1]} /></Suspense>
+  // emailed "forgot password" link: works for owners and attenders, signed in or not
+  const reset = hash.match(/^#\/reset\/([\w-]+)/)
+  if (reset) return <Suspense fallback={<Loading />}><ResetPassword token={reset[1]} /></Suspense>
   return <SignedInApp />
 }

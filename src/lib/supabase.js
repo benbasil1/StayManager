@@ -82,8 +82,15 @@ const auth = {
     emit('USER_UPDATED', s)
     return { data: { user: s.user }, error: null }
   },
-  async resetPasswordForEmail() {
-    return { data: null, error: new Error('Password reset by email is not available yet. Ask the app owner to reset it.') }
+  // Emails a one-time reset link (owner and attender use the same screen).
+  async resetPasswordForEmail(email) {
+    const { error } = await post('forgot', { email })
+    return { data: error ? null : {}, error: error || null }
+  },
+  // Used by the page the reset link opens.
+  async resetPasswordWithToken(token, password) {
+    const { error } = await post('reset', { token, password })
+    return { error: error || null }
   },
 }
 

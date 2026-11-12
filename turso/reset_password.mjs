@@ -1,4 +1,4 @@
-// Reset someone's password by hand (there is no "forgot password" email yet).
+// Reset someone's password by hand (backup for when the "Forgot password?" email is not set up).
 //   TURSO_URL=libsql://... TURSO_TOKEN=... node turso/reset_password.mjs user@example.com NewPassword123
 import { createClient } from '@libsql/client'
 import { hashPassword } from '../server/auth.js'

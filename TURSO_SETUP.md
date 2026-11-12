@@ -66,10 +66,23 @@ Anything else the agent did with Supabase (checking free beds, bookings, visits)
 - Each owner has a storage cap of 200 MB. Change it with a Cloudflare variable `FILE_QUOTA_MB` (optional).
 - In demo mode, photos stay in the browser only.
 
+## Forgot-password emails (set up once, free)
+The app needs an email service to send the reset link. Pick ONE:
+- **Brevo** (free, 300 emails/day, no domain needed): create an account at brevo.com, go to Senders & IP > Senders and add and verify
+  your own email address, then SMTP & API > API Keys > create a key.
+  Cloudflare > Pages > Settings > Variables and Secrets: add secret `BREVO_API_KEY` = the key, and variable `MAIL_FROM` = the verified email address.
+- **Resend** (free, 3000 emails/month, needs your own domain): add secret `RESEND_API_KEY` and variable `MAIL_FROM` = an address on your verified domain.
+
+Optional: variable `PUBLIC_URL` = your site, e.g. `https://staymanager.pages.dev` (otherwise the link uses the site the request came to).
+Redeploy after adding them. Rules: 3 reset emails per address per hour, each link works once, and asking never reveals whether an email has an account.
+Signed-in phones stay signed in after a reset until their 30-day login expires.
+
 ## Notes
 - The Supabase project is no longer needed. Files uploaded earlier to Supabase Storage can't be opened any more.
 - Existing Supabase users are not copied over. Sign up again, then run `turso/relink_owner.sql` to attach old data.
-- No "forgot password" email yet. Reset by hand: `node turso/reset_password.mjs <email> <new password>`.
+- "Forgot password?" on the sign-in screen emails a one-time link (valid 1 hour) to owners and attenders. See the next section to turn it on.
+  If email is not set up, or an attender's email is not a real inbox, reset by hand: `node turso/reset_password.mjs <email> <new password>`
+  (an owner can also set an attender's password in Settings).
 - Wrong passwords are limited to 8 tries per email per 15 minutes.
 - Demo mode (browser-only data) now needs `VITE_DEMO_MODE=true` in `.env.local`.
 - Dates and times are stored as text; timestamps are UTC (ends in Z).
@@ -81,4 +94,4 @@ Anything else the agent did with Supabase (checking free beds, bookings, visits)
   It also limits `/api/voice/*` writes to your PGs.
 - Set `AUTH_SECRET` to a long random value and keep it private.
 - Files changed in this release are in the zip: nothing to migrate. Indexes and the "one tenant per bed" rule are created automatically on first load.
-- Known limits: no "forgot password" email (reset with `turso/reset_password.mjs`), no push alerts when the app is fully closed.
+- Known limits: no push alerts when the app is fully closed.

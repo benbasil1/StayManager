@@ -9,6 +9,9 @@ const SESSION_DAYS = 30
 const MAX_FAILS = 8 // wrong passwords allowed per email ...
 const FAIL_WINDOW_MIN = 15 // ... within this many minutes
 const MAX_SIGNUPS_PER_IP = 10 // new accounts allowed from one network address per hour (stops bots)
+const RESET_MINUTES = 60 // a password-reset link works for this long, once
+const MAX_RESETS_PER_EMAIL = 3 // reset emails per address per hour
+const MAX_RESETS_PER_IP = 10 // reset requests per network address per hour
 const enc = new TextEncoder()
 
 const b64u = {
@@ -64,7 +67,7 @@ export async function getUser(request, env) {
   return { id: p.sub, email: String(p.email || '').toLowerCase() }
 }
 
-// ───────────── routes: /api/auth/signup | signin | password ─────────────
+// ───────────── routes: /api/auth/signup | signin | forgot | reset | password ─────────────
 let ready = false
 async function ensureTables(db) {
   if (ready) return
@@ -75,6 +78,11 @@ async function ensureTables(db) {
          email TEXT NOT NULL UNIQUE,
          password_hash TEXT NOT NULL,
          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+       )`,
+      `CREATE TABLE IF NOT EXISTS password_resets (
+         token_hash TEXT PRIMARY KEY,
+         user_id TEXT NOT NULL,
+         expires_at TEXT NOT NULL
        )`,
       `CREATE TABLE IF NOT EXISTS login_fails (email TEXT NOT NULL, at TEXT NOT NULL)`,
       `CREATE INDEX IF NOT EXISTS idx_login_fails ON login_fails(email, at)`,
@@ -95,6 +103,26 @@ const checkPassword = (p) => {
   if (typeof p !== 'string' || p.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.')
   if (p.length > 200) throw new HttpError(400, 'Password is too long.')
 }
+const sha256 = async (text) => b64u.enc(await crypto.subtle.digest('SHA-256', enc.encode(text)))
+
+// Sends the reset email through Brevo or Resend (whichever key is set). Secrets: BREVO_API_KEY or RESEND_API_KEY, and MAIL_FROM.
+const mailReady = (env) => !!((env.BREVO_API_KEY || env.RESEND_API_KEY) && env.MAIL_FROM)
+async function sendMail(env, to, subject, html) {
+  const from = String(env.MAIL_FROM).trim()
+  const res = env.BREVO_API_KEY
+    ? await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ sender: { name: 'StayManager', email: from }, to: [{ email: to }], subject, htmlContent: html }),
+      })
+    : await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ from: `StayManager <${from}>`, to: [to], subject, html }),
+      })
+  if (!res.ok) throw new Error(`Email provider said ${res.status}: ${(await res.text()).slice(0, 200)}`)
+}
+
 async function session(user, env) {
   const { token, exp } = await signToken(user, env)
   return { access_token: token, expires_at: exp, user: { id: user.id, email: user.email } }
@@ -147,6 +175,73 @@ export async function authRoute({ request, db, env, segments, body }) {
     }
     await db.execute({ sql: 'DELETE FROM login_fails WHERE email = ?', args: [email] })
     return session({ id: u.id, email: u.email }, env)
+  }
+
+  // "Forgot password": always answers the same way, so nobody can use it to find out who has an account.
+  if (what === 'forgot') {
+    if (!mailReady(env)) throw new HttpError(503, 'Password reset by email is not set up yet. Ask your owner (or the app admin) to reset it for you.')
+    const email = cleanEmail(body?.email)
+    checkEmail(email)
+    const hourAgo = new Date(Date.now() - 3600000).toISOString()
+    const ipKey = 'forgotip:' + (request.headers.get('cf-connecting-ip') || 'unknown')
+    const emailKey = 'forgot:' + email
+    const byIp = await rowOf(db, 'SELECT COUNT(*) AS n FROM login_fails WHERE email = ? AND at > ?', [ipKey, hourAgo])
+    if (Number(byIp?.n) >= MAX_RESETS_PER_IP) throw new HttpError(429, 'Too many requests. Please try again later.')
+    const byEmail = await rowOf(db, 'SELECT COUNT(*) AS n FROM login_fails WHERE email = ? AND at > ?', [emailKey, hourAgo])
+    const now = new Date().toISOString()
+    await db.batch(
+      [
+        { sql: 'INSERT INTO login_fails (email, at) VALUES (?,?)', args: [ipKey, now] },
+        ...(Number(byEmail?.n) < MAX_RESETS_PER_EMAIL ? [{ sql: 'INSERT INTO login_fails (email, at) VALUES (?,?)', args: [emailKey, now] }] : []),
+        { sql: 'DELETE FROM login_fails WHERE at < ?', args: [new Date(Date.now() - 86400000).toISOString()] },
+        { sql: 'DELETE FROM password_resets WHERE expires_at < ?', args: [now] },
+      ],
+      'write'
+    )
+    const u = Number(byEmail?.n) < MAX_RESETS_PER_EMAIL ? await rowOf(db, 'SELECT id, email FROM users WHERE email = ?', [email]) : null
+    if (u) {
+      const token = b64u.enc(crypto.getRandomValues(new Uint8Array(32)))
+      await db.execute({
+        sql: 'INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?,?,?)',
+        args: [await sha256(token), u.id, new Date(Date.now() + RESET_MINUTES * 60000).toISOString()],
+      })
+      // PUBLIC_URL (optional secret/variable) pins the link to your site; otherwise the site this request came to is used.
+      const base = String(env.PUBLIC_URL || new URL(request.url).origin).replace(/\/+$/, '')
+      const link = `${base}/#/reset/${token}`
+      try {
+        await sendMail(
+          env,
+          u.email,
+          'Reset your StayManager password',
+          `<p>Hi,</p><p>Someone asked to reset the password for your StayManager account. Tap the button below to choose a new one. The link works once and expires in ${RESET_MINUTES} minutes.</p>` +
+            `<p><a href="${link}" style="background:#1f8a4c;color:#fff;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:700">Choose a new password</a></p>` +
+            `<p style="color:#666;font-size:13px">Or open this link: ${link}<br>If you did not ask for this, ignore this email. Your password stays the same.</p>`
+        )
+      } catch (e) {
+        console.error('Reset email failed:', e?.message || e)
+      }
+    }
+    return { ok: true }
+  }
+
+  if (what === 'reset') {
+    checkPassword(body?.password)
+    const bad = () => new HttpError(400, 'This reset link is invalid or has expired. Please request a new one.')
+    const token = String(body?.token || '')
+    if (!token || token.length > 100) throw bad()
+    const r = await rowOf(db, 'SELECT user_id, expires_at FROM password_resets WHERE token_hash = ?', [await sha256(token)])
+    if (!r || r.expires_at < new Date().toISOString()) throw bad()
+    const u = await rowOf(db, 'SELECT email FROM users WHERE id = ?', [r.user_id])
+    if (!u) throw bad()
+    await db.batch(
+      [
+        { sql: 'UPDATE users SET password_hash = ? WHERE id = ?', args: [await hashPassword(body.password), r.user_id] },
+        { sql: 'DELETE FROM password_resets WHERE user_id = ?', args: [r.user_id] }, // the link (and any older ones) now stop working
+        { sql: 'DELETE FROM login_fails WHERE email = ?', args: [u.email] },
+      ],
+      'write'
+    )
+    return { ok: true }
   }
 
   if (what === 'password') {

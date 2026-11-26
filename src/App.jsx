@@ -19,6 +19,7 @@ const Settings = lazy(() => import('./components/Settings'))
 const StaffApp = lazy(() => import('./components/StaffApp'))
 const ReportPage = lazy(() => import('./components/ReportPage'))
 const ResetPassword = lazy(() => import('./components/ResetPassword'))
+const AuthPopup = lazy(() => import('./components/AuthPopup'))
 const Loading = ({ text = 'Loading…' }) => <div className="center-screen">{text}</div>
 
 const TABS = [
@@ -209,5 +210,8 @@ export default function App() {
   // emailed "forgot password" link: works for owners and attenders, signed in or not
   const reset = hash.match(/^#\/reset\/([\w-]+)/)
   if (reset) return <Suspense fallback={<Loading />}><ResetPassword token={reset[1]} /></Suspense>
+  // last step of Google / Apple sign-in: /#/oauth?code=<single-use code>
+  const oauth = hash.match(/^#\/oauth\?code=([^.]+)$/)
+  if (oauth) return <Suspense fallback={<Loading />}><AuthPopup code={decodeURIComponent(oauth[1])} /></Suspense>
   return <SignedInApp />
 }

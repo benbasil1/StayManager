@@ -11,8 +11,9 @@ export default function Login({ auth }) {
   const [remember, setRemember] = useState(true)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState({ type: '', text: '' })
+  const [awaitCode, setAwaitCode] = useState('')
 
-  const switchMode = (m) => { setMode(m); setConfirm(''); setMsg({ type: '', text: '' }) }
+  const switchMode = (m) => { setMode(m); setConfirm(''); setAwaitCode(''); setMsg({ type: '', text: '' }) }
 
   const first = (saved?.email || '').split('@')[0].replace(/[._-]+/g, ' ').split(' ')[0]
   const name = first ? first.charAt(0).toUpperCase() + first.slice(1) : ''
@@ -57,6 +58,45 @@ export default function Login({ auth }) {
     }
   }
 
+  async function startOauth(provider) {
+    setBusy(true)
+    setMsg({ type: '', text: '' })
+    try {
+      // The server sends a 302 to Google / Apple, so just navigate there directly.
+      window.location.href = `/api/auth/${provider}/start`
+    } catch (err) {
+      setMsg({ type: 'err', text: err.message || 'Could not start sign-in.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function sendCode() {
+    setBusy(true)
+    setMsg({ type: '', text: '' })
+    try {
+      const { error, needsCode } = await auth.signUp(email, password)
+      if (error) throw error
+      if (needsCode) setAwaitCode(email)
+    } catch (err) {
+      setMsg({ type: 'err', text: err.message || 'Could not start sign-up.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function verifyCode() {
+    setBusy(true)
+    setMsg({ type: '', text: '' })
+    try {
+      await supabase.auth.signUpVerify({ email: awaitCode, code: confirm })
+    } catch (err) {
+      setMsg({ type: 'err', text: err.message || 'Code did not match. Please try again.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="login-wrap">
       <div className="login-card">
@@ -69,26 +109,44 @@ export default function Login({ auth }) {
 
         {isSupabaseConfigured ? (
           <form onSubmit={submit} className="login-form">
-            <label>Email<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
-            {mode !== 'forgot' && (
-              <label>{mode === 'signup' ? 'Password (at least 8 characters)' : 'Password'}<input type="password" required minLength={mode === 'signup' ? 8 : undefined} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} /></label>
+            {mode === 'signup' && awaitCode === email && (
+              <>
+                <label>Code sent to {email}<input type="text" required minLength={6} maxLength={6} pattern="[0-9]{6}" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="one-time-code" placeholder="123456" /></label>
+                <p className="muted" style={{ margin: '2px 0' }}>Enter the 6-digit code we just emailed you. It expires in 10 minutes.</p>
+                {msg.text && <div className={'notice ' + msg.type}>{msg.text}</div>}
+                <button className="btn primary block" disabled={busy} onClick={verifyCode}>{busy ? 'Please wait…' : 'Verify code'}</button>
+                <button type="button" className="link block" onClick={() => switchMode('signin')}>Back to password sign-up</button>
+              </>
             )}
-            {mode === 'signup' && (
-              <label>Confirm password<input type="password" required minLength={8} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" aria-invalid={confirm && confirm !== password ? 'true' : undefined} />
-                {confirm && confirm !== password && <small className="pw-mismatch">Passwords do not match</small>}
-                {confirm && confirm === password && <small className="pw-match">Passwords match ✓</small>}
-              </label>
-            )}
-            {mode !== 'forgot' && (
-              <label className="remember"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /><span>Remember me <em>(stay signed in on this device)</em></span></label>
-            )}
-            {mode === 'forgot' && <p className="muted" style={{ margin: 0 }}>Enter the email you sign in with and we will email you a link to choose a new password. Attenders can also ask their owner to reset it.</p>}
-            {msg.text && <div className={'notice ' + msg.type}>{msg.text}</div>}
-            <button className="btn primary block" disabled={busy}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'forgot' ? 'Send reset link' : 'Create account'}</button>
-            {mode === 'signin' && <button type="button" className="link" onClick={() => switchMode('forgot')}>Forgot password?</button>}
-            <button type="button" className="link" onClick={() => switchMode(mode === 'signup' || mode === 'forgot' ? 'signin' : 'signup')}>
-              {mode === 'signin' ? 'New here? Create an account' : mode === 'forgot' ? 'Back to sign in' : 'Already have an account? Sign in'}
-            </button>
+            {mode !== 'signup' || awaitCode === '' ? (
+              <>
+                <label>Email<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
+                {mode !== 'forgot' && (
+                  <label>{mode === 'signup' ? 'Password (at least 8 characters)' : 'Password'}<input type="password" required minLength={mode === 'signup' ? 8 : undefined} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} /></label>
+                )}
+                {mode === 'signup' && (
+                  <label>Confirm password<input type="password" required minLength={8} value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" aria-invalid={confirm && confirm !== password ? 'true' : undefined} />
+                    {confirm && confirm !== password && <small className="pw-mismatch">Passwords do not match</small>}
+                    {confirm && confirm === password && <small className="pw-match">Passwords match ✓</small>}
+                  </label>
+                )}
+                {mode !== 'forgot' && (
+                  <label className="remember"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /><span>Remember me <em>(stay signed in on this device)</em></span></label>
+                )}
+                {mode === 'forgot' && <p className="muted" style={{ margin: 0 }}>Enter the email you sign in with and we will email you a link to choose a new password. Attenders can also ask their owner to reset it.</p>}
+                {msg.text && <div className={'notice ' + msg.type}>{msg.text}</div>}
+                <button className="btn primary block" disabled={busy}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'forgot' ? 'Send reset link' : 'Send code'}</button>
+                <div className="oauth">
+                  <p className="muted" style={{ margin: '4px 0 0', textAlign: 'center', fontSize: '.85rem' }}>Or continue with</p>
+                  <button type="button" className="btn oauth-btn block" disabled={busy} onClick={() => startOauth('google')}><Icon name="google" size={18} /> Continue with Google</button>
+                  <button type="button" className="btn oauth-btn block" disabled={busy} onClick={() => startOauth('apple')}><Icon name="apple" size={18} /> Continue with Apple</button>
+                </div>
+                {mode === 'signin' && <button type="button" className="link" onClick={() => switchMode('forgot')}>Forgot password?</button>}
+                <button type="button" className="link" onClick={() => switchMode(mode === 'signup' || mode === 'forgot' ? 'signin' : 'signup')}>
+                  {mode === 'signin' ? 'New here? Create an account' : mode === 'forgot' ? 'Back to sign in' : 'Already have an account? Sign in'}
+                </button>
+              </>
+            ) : null}
           </form>
         ) : (
           <div className="login-form">

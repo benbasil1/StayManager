@@ -22,23 +22,47 @@ function Seg({ value, options, onChange, label }) {
   )
 }
 
+// Two-step change password: the server emails a code first, then you supply that code
+// with your current password and the new one.
 function PasswordForm({ auth }) {
+  const [step, setStep] = useState('check') // 'check' | 'code' | 'done'
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [again, setAgain] = useState('')
+  const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState({ type: '', text: '' })
 
-  async function submit(e) {
+  async function start(e) {
     e.preventDefault()
     setMsg({ type: '', text: '' })
-    if (next.length < 6) return setMsg({ type: 'err', text: 'New password must be at least 6 characters.' })
-    if (next !== again) return setMsg({ type: 'err', text: 'The two new passwords do not match.' })
-    if (next === current) return setMsg({ type: 'err', text: 'Choose a password different from the current one.' })
+    if (!current) return setMsg({ type: 'err', text: 'Enter your current password.' })
     setBusy(true)
     try {
-      await auth.changePassword(current, next)
-      setCurrent(''); setNext(''); setAgain('')
+      const { error } = await auth.startPasswordChange({ current_password: current })
+      if (error) throw error
+      setStep('code')
+      setMsg({ type: 'ok', text: 'A code has been emailed to your account. Enter it below.' })
+    } catch (err) {
+      setMsg({ type: 'err', text: err.message || 'Could not send the code.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function finish(e) {
+    e.preventDefault()
+    setMsg({ type: '', text: '' })
+    if (next.length < 8) return setMsg({ type: 'err', text: 'New password must be at least 8 characters.' })
+    if (next !== again) return setMsg({ type: 'err', text: 'The two new passwords do not match.' })
+    if (next === current) return setMsg({ type: 'err', text: 'Choose a password different from the current one.' })
+    if (!/^\d{6}$/.test(code)) return setMsg({ type: 'err', text: 'Enter the 6-digit code from the email.' })
+    setBusy(true)
+    try {
+      const { error } = await auth.finishPasswordChange({ current_password: current, new_password: next, code })
+      if (error) throw error
+      setCurrent(''); setNext(''); setAgain(''); setCode('')
+      setStep('done')
       setMsg({ type: 'ok', text: 'Password updated.' })
     } catch (err) {
       setMsg({ type: 'err', text: err.message || 'Could not change the password.' })
@@ -48,12 +72,25 @@ function PasswordForm({ auth }) {
   }
 
   return (
-    <form className="login-form" style={{ marginTop: 0 }} onSubmit={submit}>
-      <label>Current password<input type="password" required value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></label>
-      <label>New password<input type="password" required minLength={6} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" /></label>
-      <label>Confirm new password<input type="password" required minLength={6} value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" /></label>
-      {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
-      <button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Update password'}</button>
+    <form className="login-form" style={{ marginTop: 0 }} onSubmit={step === 'code' ? finish : start}>
+      {step === 'check' ? (
+        <>
+          <label>Current password<input type="password" required value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></label>
+          {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
+          <button className="btn primary" disabled={busy}>{busy ? 'Sending…' : 'Send code to my email'}</button>
+        </>
+      ) : step === 'done' ? (
+        <div className="notice ok">Password updated.</div>
+      ) : (
+        <>
+          <label>Code from your email<input type="text" required minLength={6} maxLength={6} pattern="[0-9]{6}" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" placeholder="123456" /></label>
+          <label>New password<input type="password" required minLength={8} value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" /></label>
+          <label>Confirm new password<input type="password" required minLength={8} value={again} onChange={(e) => setAgain(e.target.value)} autoComplete="new-password" /></label>
+          {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
+          <button className="btn primary" disabled={busy}>{busy ? 'Saving…' : 'Change password'}</button>
+          <button type="button" className="link" onClick={() => setStep('check')}>Cancel</button>
+        </>
+      )}
     </form>
   )
 }
@@ -245,7 +282,7 @@ function QrCard() {
   function print() {
     const w = window.open('', '_blank')
     if (!w) { setMsg('Your browser blocked the print window. Allow pop-ups for this site and try again.'); return }
-    w.document.write(posterHtml({ name: property.name, qrImage: img, link: url, ownerPhone: property.owner_phone, attenderPhone: property.attender_phone }))
+    w.document.write(posterHtml({ name: property.name, qrImage: img, link: url, ownerPhone: property.owner_phone, attenderPhone: property.attenderPhone }))
     w.document.close() // the poster prints itself once its fonts have loaded
   }
 

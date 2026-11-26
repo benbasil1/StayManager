@@ -76,18 +76,45 @@ const auth = {
     emit('SIGNED_IN', payload)
     return { data: { user: payload.user, session: payload }, error: null }
   },
-  async signUp({ email, password, remember = true }) {
-    const { payload, error } = await post('signup', { email, password })
+
+  // Sign-up is two steps now: this emails a 6-digit code, and signUpVerify creates the account.
+  async signUp({ email, password }) {
+    const { error } = await post('signup/start', { email, password })
     if (error) return { data: { user: null, session: null }, error }
-    write(payload, remember) // signed in straight away (no email confirmation step)
+    return { data: { user: null, session: null }, error: null, needsCode: true }
+  },
+  // Checks the code and, if it matches, creates the account and signs in.
+  async signUpVerify({ email, code, remember = true }) {
+    const { payload, error } = await post('signup/verify', { email, code })
+    if (error) return { data: { user: null, session: null }, error }
+    write(payload, remember)
     emit('SIGNED_IN', payload)
     return { data: { user: payload.user, session: payload }, error: null }
   },
+
   async signOut() {
     write(null)
     emit('SIGNED_OUT', null)
     return { error: null }
   },
+
+  // Changing a password is two steps too: check the current password and email a code,
+  // then supply that code plus the new password.
+  async startPasswordChange({ current_password }) {
+    const s = read()
+    if (!s) return { error: new Error('Not signed in') }
+    const { error } = await post('password/start', { current_password }, s.access_token)
+    return { error: error || null }
+  },
+  async finishPasswordChange({ current_password, new_password, code }) {
+    const s = read()
+    if (!s) return { error: new Error('Not signed in') }
+    const { error } = await post('password/verify', { current_password, new_password, code }, s.access_token)
+    if (error) return { error }
+    emit('USER_UPDATED', s)
+    return { error: null }
+  },
+  // Kept for compatibility: one call that does only the "check current password" half.
   async updateUser({ password, current_password }) {
     const s = read()
     if (!s) return { data: { user: null }, error: new Error('Not signed in') }
@@ -97,6 +124,7 @@ const auth = {
     emit('USER_UPDATED', s)
     return { data: { user: s.user }, error: null }
   },
+
   // Emails a one-time reset link (owner and attender use the same screen).
   async resetPasswordForEmail(email) {
     const { error } = await post('forgot', { email })
@@ -106,6 +134,14 @@ const auth = {
   async resetPasswordWithToken(token, password) {
     const { error } = await post('reset', { token, password })
     return { error: error || null }
+  },
+  // Last step of Google / Apple sign-in: trade the single-use code for a session.
+  async exchangeOauthCode(code, remember = true) {
+    const { payload, error } = await post('oauth/exchange', { code })
+    if (error) return { data: { user: null, session: null }, error }
+    write(payload, remember)
+    emit('SIGNED_IN', payload)
+    return { data: { user: payload.user, session: payload }, error: null }
   },
 }
 

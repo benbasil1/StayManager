@@ -364,3 +364,8 @@ label input:focus, label select:focus, .textarea:focus { border-color: var(--gre
 .login-form label.remember em { font-style: normal; color: var(--muted, #6b7280); font-size: 0.8rem; }
 .pw-mismatch { color: var(--err-ink); font-weight: 600; }
 .pw-match { color: var(--ok-ink); font-weight: 600; }
+
+/* Third-party sign-in buttons */
+.oauth { margin-top: 4px; }
+.oauth-btn { width: 100%; background: #fff; border: 1px solid var(--line); color: var(--ink); margin-bottom: 8px; justify-content: center; gap: 8px; }
+.oauth-btn:hover { background: var(--tint); border-color: var(--green); }

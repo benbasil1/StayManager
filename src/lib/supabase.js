@@ -8,15 +8,30 @@ const KEY = 'stay_session'
 export const isSupabaseConfigured = import.meta.env.VITE_DEMO_MODE !== 'true'
 
 const listeners = new Set()
-const read = () => {
+// "Remember me" ON  -> session kept in localStorage (stays signed in after closing the browser).
+// "Remember me" OFF -> session kept in sessionStorage (ends when the tab/browser is closed).
+const readFrom = (store) => {
   try {
-    const s = JSON.parse(localStorage.getItem(KEY) || 'null')
+    const s = JSON.parse(store.getItem(KEY) || 'null')
     if (s?.access_token && s.expires_at > Date.now() / 1000) return s
   } catch { /* ignore */ }
   return null
 }
-const write = (s) => {
-  try { s ? localStorage.setItem(KEY, JSON.stringify(s)) : localStorage.removeItem(KEY) } catch { /* ignore */ }
+const read = () => readFrom(window.localStorage) || readFrom(window.sessionStorage)
+const write = (s, remember = true) => {
+  try {
+    localStorage.removeItem(KEY)
+    sessionStorage.removeItem(KEY)
+    if (s) (remember ? localStorage : sessionStorage).setItem(KEY, JSON.stringify(s))
+  } catch { /* ignore */ }
+}
+// Remembered login details (email only, never the password) for the "Welcome back" greeting.
+const LAST = 'stay_last_login'
+export const getRememberedLogin = () => {
+  try { return JSON.parse(localStorage.getItem(LAST) || 'null') } catch { return null }
+}
+export const setRememberedLogin = (email, remember) => {
+  try { remember && email ? localStorage.setItem(LAST, JSON.stringify({ email, remember: true })) : localStorage.removeItem(LAST) } catch { /* ignore */ }
 }
 const emit = (event, s) => listeners.forEach((cb) => { try { cb(event, s) } catch { /* ignore */ } })
 if (typeof window !== 'undefined') {
@@ -54,17 +69,17 @@ const auth = {
     setTimeout(() => cb('INITIAL_SESSION', read()), 0)
     return { data: { subscription: { unsubscribe: () => listeners.delete(cb) } } }
   },
-  async signInWithPassword({ email, password }) {
+  async signInWithPassword({ email, password, remember = true }) {
     const { payload, error } = await post('signin', { email, password })
     if (error) return { data: { user: null, session: null }, error }
-    write(payload)
+    write(payload, remember)
     emit('SIGNED_IN', payload)
     return { data: { user: payload.user, session: payload }, error: null }
   },
-  async signUp({ email, password }) {
+  async signUp({ email, password, remember = true }) {
     const { payload, error } = await post('signup', { email, password })
     if (error) return { data: { user: null, session: null }, error }
-    write(payload) // signed in straight away (no email confirmation step)
+    write(payload, remember) // signed in straight away (no email confirmation step)
     emit('SIGNED_IN', payload)
     return { data: { user: payload.user, session: payload }, error: null }
   },

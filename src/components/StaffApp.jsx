@@ -1,4 +1,5 @@
 // Attender (staff) view: Complaints and Calls tabs only, each with Call / WhatsApp buttons. No rent, payments or ID proofs.
+import PgSwitcher from './PgSwitcher'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Icon from './Icon'
 import NotifyTenant from './NotifyTenant'
@@ -192,9 +193,7 @@ export default function StaffApp({ auth }) {
             <p className="muted">Hello, {auth.session.name}</p>
             <div className="pg-select">
               {data.properties.length > 1 ? (
-                <select value={propertyId || ''} onChange={(e) => selectProperty(e.target.value)} aria-label="Switch PG">
-                  {data.properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                <PgSwitcher properties={data.properties} value={propertyId || ''} onChange={selectProperty} />
               ) : (
                 <h1>{property ? property.name : 'Attender'}</h1>
               )}

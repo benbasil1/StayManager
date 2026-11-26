@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import PgSwitcher from './components/PgSwitcher'
 import { useAuth } from './lib/auth'
 import { isSupabaseConfigured } from './lib/supabase'
 import * as api from './lib/api'
@@ -124,9 +125,7 @@ function Shell({ auth }) {
             <p className="muted">Hello, {auth.session.name}</p>
             <div className="pg-select">
               {data.properties.length > 1 ? (
-                <select value={data.propertyId} onChange={(e) => data.selectProperty(e.target.value)} aria-label="Switch PG">
-                  {data.properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                <PgSwitcher properties={data.properties} value={data.propertyId} onChange={data.selectProperty} />
               ) : (
                 <h1>{data.property.name}</h1>
               )}

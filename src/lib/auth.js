@@ -28,13 +28,13 @@ export function useAuth() {
     setSession({ email: 'demo@staymanager.app', name: 'Demo' })
   }, [])
 
-  const signIn = useCallback(async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+  const signIn = useCallback(async (email, password, remember = true) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password, remember })
     if (error) throw error
   }, [])
 
-  const signUp = useCallback(async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({ email, password })
+  const signUp = useCallback(async (email, password, remember = true) => {
+    const { data, error } = await supabase.auth.signUp({ email, password, remember })
     if (error) throw error
     // If email confirmation is ON in Supabase, there is no session yet.
     return { needsConfirmation: !data.session }

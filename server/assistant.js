@@ -2,7 +2,7 @@
 // Secrets (Cloudflare > Pages > your project > Settings > Variables and Secrets):
 //   GEMINI_API_KEY   free key from https://aistudio.google.com/apikey   (enough on its own)
 //   GROQ_API_KEY     optional second choice, used only if Gemini is missing or fails
-// Optional: GEMINI_MODEL (default gemini-2.5-flash), GROQ_MODEL (default llama-3.3-70b-versatile)
+// Optional: GEMINI_MODEL (default gemini-3.8-flash), GROQ_MODEL (default llama-3.3-70b-versatile)
 
 const SYSTEM =
   'You are StayManager AI, a friendly assistant for a PG (paying guest accommodation) owner in India. ' +
@@ -17,15 +17,22 @@ async function readJson(res) {
   try { return await res.json() } catch { return {} }
 }
 
+// Gemini 3.x uses thinkingLevel (and wants no temperature); 2.5 uses thinkingBudget. Thinking is kept minimal: this is a simple lookup task.
+function genConfig(model) {
+  if (/gemini-3/.test(model)) return { maxOutputTokens: 1200, thinkingConfig: { thinkingLevel: 'low' } }
+  if (/gemini-2\.5/.test(model)) return { maxOutputTokens: 1200, temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } }
+  return { maxOutputTokens: 1200, temperature: 0.3 }
+}
+
 async function gemini(env, question, context) {
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash'
+  const model = env.GEMINI_MODEL || 'gemini-3.8-flash'
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM }] },
       contents: [{ role: 'user', parts: [{ text: prompt(question, context) }] }],
-      generationConfig: { maxOutputTokens: 1000, temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } },
+      generationConfig: genConfig(model),
     }),
   })
   const json = await readJson(res)

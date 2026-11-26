@@ -24,8 +24,7 @@ function genConfig(model) {
   return { maxOutputTokens: 1200, temperature: 0.3 }
 }
 
-async function gemini(env, question, context) {
-  const model = env.GEMINI_MODEL || 'gemini-3.8-flash'
+async function gemini(env, question, context, model) {
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
@@ -36,10 +35,28 @@ async function gemini(env, question, context) {
     }),
   })
   const json = await readJson(res)
-  if (!res.ok) throw new Error(`Gemini: ${json?.error?.message || res.status}`)
+  if (!res.ok) throw Object.assign(new Error(`Gemini (${model}): ${json?.error?.message || res.status}`), { status: res.status })
   const text = (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('\n').trim()
   if (!text) throw new Error('Gemini returned an empty answer')
   return text
+}
+
+// Google's newest model can be briefly overloaded (503/429), so: retry once, then fall back to the previous Gemini model.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function geminiWithFallback(env, question, context) {
+  const models = [...new Set([env.GEMINI_MODEL || 'gemini-3.8-flash', 'gemini-3.7-flash'])]
+  let last
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { return await gemini(env, question, context, model) } catch (e) {
+        last = e
+        const busy = e.status === 503 || e.status === 429 || e.status === 500
+        if (!busy) break // wrong model / bad key: retrying will not help, try the next model
+        if (attempt === 0) await sleep(1200)
+      }
+    }
+  }
+  throw last
 }
 
 async function groq(env, question, context) {
@@ -68,7 +85,7 @@ export async function assistantRoute({ env, body }) {
     return { ai: false, reason: 'The AI is not switched on yet: GEMINI_API_KEY is missing on the server. Add it in Cloudflare > Pages > Settings > Variables and Secrets, then redeploy.' }
   }
   const errors = []
-  for (const [name, key, fn] of [['Gemini', env.GEMINI_API_KEY, gemini], ['Groq', env.GROQ_API_KEY, groq]]) {
+  for (const [name, key, fn] of [['Gemini', env.GEMINI_API_KEY, geminiWithFallback], ['Groq', env.GROQ_API_KEY, groq]]) {
     if (!key) continue
     try { return { ai: true, answer: await fn(env, question, body?.context) } } catch (e) { errors.push(String(e?.message || e)); console.error(name, e?.message || e) }
   }

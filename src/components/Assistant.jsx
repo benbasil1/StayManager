@@ -13,60 +13,6 @@ const SUGGESTIONS = [
   'Occupancy by floor',
 ]
 
-// The AI is on by default (it needs GEMINI_API_KEY or GROQ_API_KEY on the server). Set VITE_USE_AI_FUNCTION=false to turn it off.
-const USE_AI = import.meta.env.VITE_USE_AI_FUNCTION !== 'false'
-
-// Everything the model may use to answer. Tenants carry their rent dues; phone numbers and ID details are NOT sent.
-function buildContext(data) {
-  const bedInfo = {}
-  data.tenantRows.forEach((r) => { bedInfo[r.bed.id] = r })
-  return {
-    property: data.property?.name,
-    summary: {
-      total_rooms: data.stats.totalRooms,
-      total_beds: data.stats.totalBeds,
-      filled_beds: data.stats.filled,
-      vacant_beds: data.stats.vacant,
-      occupancy_percent: data.stats.occupancy,
-      monthly_revenue: data.stats.revenue,
-      open_complaints: data.complaints.filter((c) => c.status === 'open').length,
-      calls_last_7_days: data.stats.totalCalls,
-    },
-    rooms: data.rooms.map((r) => ({
-      room: r.room_no,
-      floor: r.floor,
-      rent_per_bed: r.price,
-      beds: r.beds.map((b) => ({
-        bed: b.label,
-        occupied: !!b.occupied,
-        tenant: bedInfo[b.id]?.tenant.name || null,
-        vacant_since: b.occupied ? null : b.vacant_since || null,
-      })),
-    })),
-    tenants: data.tenantRows.map((r) => ({
-      name: r.tenant.name,
-      room: r.room.room_no,
-      bed: r.bed.label,
-      rent: Number(r.tenant.rent_amount) || 0,
-      deposit: Number(r.tenant.deposit) || 0,
-      moved_in: r.tenant.move_in || null,
-      leaving_on: r.tenant.leaving_on || null,
-      rent_status: r.summary.status,
-      rent_due: r.summary.due,
-      unpaid_months: r.summary.unpaidMonths,
-      next_due_date: r.summary.dueDate,
-      total_paid: r.summary.paid,
-    })),
-    complaints: data.complaints.slice(0, 60).map((c) => ({
-      tenant: c.tenant_name, message: c.message, category: c.category, priority: c.priority, kind: c.kind, status: c.status, date: String(c.created_at || '').slice(0, 10),
-    })),
-    calls: data.calls.slice(0, 40).map((c) => ({
-      caller: c.caller_name, intent: c.intent, summary: c.summary, date: String(c.created_at || '').slice(0, 10),
-    })),
-    call_intent_counts: Object.fromEntries(data.stats.intents || []),
-  }
-}
-
 const STOP = new Set(('show list give tell me the all only any of in on for to a an is are was what which who how many much my our and or with about please can you do does have has there their them those these this that '
   + 'complaint complaints complain compalints compalint request requests issue issues problem problems pending open progress resolved closed done fixed status high medium low priority').split(' '))
 
@@ -207,17 +153,28 @@ export default function Assistant() {
       const leaveReply = leavingCommand(q, data.tenantRows, data.updateTenant)
       if (leaveReply) {
         answer = leaveReply
-      } else if (USE_AI && isSupabaseConfigured && data.property?.id) {
-        const history = messages.slice(1).map((m) => ({ from: m.from, text: m.text })) // skip the greeting
-        const res = await askAssistant({ property_id: data.property.id, question: q, context: buildContext(data), history })
-        answer = res.answer
+      } else if (isSupabaseConfigured) {
+        const context = {
+          property: data.property?.name,
+          stats: { ...data.stats, days: undefined },
+          rooms: data.rooms.map((r) => ({ room: r.room_no, floor: r.floor, price: r.price, beds: r.beds.map((b) => b.occupied) })),
+          // names, rooms and rent status only (no phone numbers or ID details are sent)
+          tenants: data.tenantRows.map((r) => ({
+            name: r.tenant.name, room: r.room.room_no, floor: r.room.floor, bed: r.bed.label,
+            rent: r.tenant.rent_amount, move_in: r.tenant.move_in, leaving_on: r.tenant.leaving_on || null,
+            rent_status: r.summary?.status, rent_due: r.summary?.due,
+          })),
+          complaints: data.complaints.slice(0, 40),
+          calls: data.calls.slice(0, 40),
+        }
+        const res = await askAssistant(q, context)
+        answer = res?.ai ? res.answer : `${res?.reason || 'The AI is not available right now.'}\n\nHere is what I can see in your data:\n${localAnswer(q, data)}`
       } else {
         await new Promise((r) => setTimeout(r, 450))
         answer = localAnswer(q, data)
       }
     } catch (e) {
-      const why = e?.code === 'no_ai_key' ? 'The AI is not switched on yet (the server has no free AI key).' : 'I could not reach the AI service.'
-      answer = `${why} Here is what I can tell from your data:\n` + localAnswer(q, data)
+      answer = `I could not reach the AI service (${e?.message || 'unknown error'}), so here is what I can see in your data:\n` + localAnswer(q, data)
     }
     setMessages((m) => [...m, { from: 'bot', text: answer }])
     setBusy(false)

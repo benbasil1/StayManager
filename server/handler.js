@@ -5,7 +5,7 @@
 // handle({ request, db, env, getUser }) -> Response   (db = a @libsql/client client)
 
 import { HttpError } from './errors.js'
-import { askAssistant } from './assistant.js'
+import { assistantRoute } from './assistant.js'
 import { authRoute, getUser as verifyLogin, createLogin, findLogin, loginExists, setLoginPassword, deleteLogin } from './auth.js'
 
 const CORS = {
@@ -654,12 +654,6 @@ async function route({ request, db, user, segments, url, body, env }) {
 
   if (a === 'role' && method === 'GET') return role(db, user)
 
-  // AI Assistant tab: owner-only, and only for a PG the signed-in owner owns.
-  if (a === 'assistant' && method === 'POST') {
-    await requireOwner(db, user, String(body?.property_id || ''))
-    return askAssistant({ env, body })
-  }
-
   if (a === 'properties') {
     if (!b && method === 'GET') return loadProperties(db, user)
     if (!b && method === 'POST') {
@@ -1019,6 +1013,7 @@ export async function handle({ request, db, env = {}, getUser }) {
     if (segments[0] === 'report') return json(await reportRoute({ request, db, segments, body }))
     if (segments[0] === 'auth') return json(await authRoute({ request, db, env, segments, body }))
     const user = await getUser(request, env)
+    if (segments[0] === 'assistant' && request.method === 'POST') return json(await assistantRoute({ env, body }))
     const out = await route({ request, db, user, segments, url, body, env })
     return out instanceof Response ? out : json(out)
   } catch (e) {

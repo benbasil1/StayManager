@@ -30,6 +30,8 @@ async function call(method, path, body) {
   return payload
 }
 
+export const askAssistant = (question, context) => call('POST', '/assistant', { question, context })
+
 export const loadProperties = () => call('GET', '/properties')
 
 export async function loadPropertyData(propertyId) {
@@ -68,9 +70,6 @@ export const setComplaintStatus = (id, status) => call('PATCH', `/complaints/${i
 export const setComplaintNotified = (id, status) => call('PATCH', `/complaints/${id}`, { notified_status: status })
 
 export const loadSampleData = () => call('POST', '/seed')
-
-// Free AI (Gemini / Groq) running on the server; returns { answer }
-export const askAssistant = (body) => call('POST', '/assistant', body)
 
 export const sendFeedback = ({ kind, message }) => call('POST', '/feedback', { kind, message })
 

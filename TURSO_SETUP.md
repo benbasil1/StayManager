@@ -23,6 +23,7 @@ Supabase is no longer used.
 | `TURSO_TOKEN` | the Turso token | **Secret** |
 | `VOICE_API_KEY` | a long random string (only if the voice agent writes data) | **Secret** |
 
+| `GEMINI_API_KEY` | free key from https://aistudio.google.com/apikey (powers the AI Assistant tab; `GROQ_API_KEY` also works) | **Secret** |
 | `AUTH_SECRET` | a long random string, 32+ characters (signs login tokens) | **Secret** |
 
 Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
@@ -31,7 +32,7 @@ The `users` table is created automatically the first time someone signs up.
 Then redeploy (Deployments > Retry, or push a commit).
 
 ## 3. Put these files in the repo and push
-`functions/api/[[path]].js`, `server/handler.js`, `server/auth.js`, `server/errors.js`, `src/lib/supabase.js`, `src/lib/api.js`, `src/lib/store.jsx`, `public/sw.js`,
+`functions/api/[[path]].js`, `server/handler.js`, `server/auth.js`, `server/errors.js`, `server/assistant.js`, `src/lib/supabase.js`, `src/lib/api.js`, `src/lib/store.jsx`, `public/sw.js`,
 `.env.example`, `turso/` (migration tools). `@libsql/client` is already in package.json.
 
 ## 4. Android / iOS app

@@ -94,19 +94,15 @@ The voice agent can also read free beds from `beds` where `occupied = false` (jo
 
 > Never put the service_role key inside this app or in any `VITE_` variable. It bypasses all security. Keep it only in the voice agent's server.
 
-## 7. (Optional) Smarter AI Assistant tab (free)
+## 7. Smarter AI Assistant tab (free)
 
-Out of the box the assistant answers from your data with built-in rules. To make it understand free-form questions, deploy the `assistant` function with a **free** key from Google Gemini (https://aistudio.google.com/apikey) or Groq (https://console.groq.com/keys):
+The assistant answers free-form questions ("who has not paid rent?", "kitne bed khali hai?") with a **free** AI model. It runs on your Cloudflare backend (`/api/assistant`), so the key never reaches the browser.
 
-```bash
-npm i -g supabase
-supabase login
-supabase link --project-ref YOUR_PROJECT_REF
-supabase secrets set GEMINI_API_KEY=your-key      # or: GROQ_API_KEY=your-key
-supabase functions deploy assistant
-```
+1. Get a free key from Google Gemini (https://aistudio.google.com/apikey). Optionally also one from Groq (https://console.groq.com/keys); it is used automatically if Gemini is busy.
+2. Cloudflare > Pages > your project > Settings > Variables and Secrets: add `GEMINI_API_KEY` (and/or `GROQ_API_KEY`) as a **Secret**.
+3. Redeploy (Deployments > Retry, or push a commit).
 
-Then set `VITE_USE_AI_FUNCTION=true` in `.env.local` and restart. The key stays on the server, never in the browser. Free tiers have rate limits, and the provider may use free-tier prompts to improve its products, so the assistant is sent room, complaint and call data (tenant names appear in complaints). A paid `ANTHROPIC_API_KEY` also works.
+No other setting is needed. Without a key the tab still works using built-in rules for vacancies, complaints, revenue and calls. To switch the AI off, set `VITE_USE_AI_FUNCTION=false`. Free tiers have rate limits, and the provider may use free-tier prompts to improve its products. The assistant is sent rooms, tenant names with rent dues, complaints and call summaries (never phone numbers or ID details).
 
 ## Feedback
 
@@ -177,7 +173,7 @@ src/
   lib/idDocs.js         ID photo upload / view / delete
 supabase/
   schema.sql            tables, security rules, realtime, sample-data function
-  functions/assistant/  optional Claude-powered assistant
+  (the AI assistant now lives in server/assistant.js)
 public/                 PWA manifest, service worker, icons
 ```
 

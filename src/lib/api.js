@@ -69,6 +69,9 @@ export const setComplaintNotified = (id, status) => call('PATCH', `/complaints/$
 
 export const loadSampleData = () => call('POST', '/seed')
 
+// Free AI (Gemini / Groq) running on the server; returns { answer }
+export const askAssistant = (body) => call('POST', '/assistant', body)
+
 export const sendFeedback = ({ kind, message }) => call('POST', '/feedback', { kind, message })
 
 // ----- files (ID photos, payment screenshots) stored in Turso -----

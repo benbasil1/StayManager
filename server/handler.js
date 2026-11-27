@@ -1006,12 +1006,19 @@ export async function handle({ request, db, env = {}, getUser }) {
       // raw file bytes (not JSON); refuse oversized uploads before reading them
       if (Number(request.headers.get('content-length') || 0) > MAX_PDF_BYTES + 4096) throw new HttpError(413, 'The file is too large.')
       body = new Uint8Array(await request.arrayBuffer())
+    } else if (segments[0] === 'auth' && segments[2] === 'callback') {
+      // Apple posts a form (form_post); leave the body unread so auth.js can call request.formData()
+      body = undefined
     } else if (!['GET', 'DELETE', 'HEAD'].includes(request.method)) {
       try { body = await request.json() } catch { body = {} }
     }
     if (segments[0] === 'voice') return json(await voiceRoute({ request, db, env, segments, body }))
     if (segments[0] === 'report') return json(await reportRoute({ request, db, segments, body }))
-    if (segments[0] === 'auth') return json(await authRoute({ request, db, env, segments, body }))
+    if (segments[0] === 'auth') {
+      const out = await authRoute({ request, db, env, segments, body })
+      // Google/Apple start + callback return a 302 Response; pass it through instead of wrapping it as JSON
+      return out instanceof Response ? out : json(out)
+    }
     const user = await getUser(request, env)
     if (segments[0] === 'assistant' && request.method === 'POST') return json(await assistantRoute({ env, body }))
     const out = await route({ request, db, user, segments, url, body, env })

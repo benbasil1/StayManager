@@ -8,24 +8,18 @@
 // It is a full-page redirect, not a popup, because popups are blocked or broken in
 // Android WebView (Capacitor) and in some installed-PWA contexts.
 import { useEffect } from 'react'
+import { supabase } from '../lib/supabase'
 
 export default function AuthPopup({ code, auth }) {
   useEffect(() => {
     let alive = true
     ;(async () => {
       if (!code) return
-      try {
-        const res = await fetch('/api/auth/oauth/exchange', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code }),
-        })
-        if (!res.ok) throw new Error('Could not finish signing in.')
-        if (alive) {
-          window.location.hash = ''
-          window.location.reload()
-        }
-      } catch { /* fall back to a plain reload so the app can show an error */ }
+      const { error } = await supabase.auth.exchangeOauthCode(code, true)
+      if (!alive) return
+      // exchangeOauthCode saves the session; reload so the app picks it up
+      window.location.hash = error ? '#/login?error=' + encodeURIComponent(error.message || 'Could not finish signing in.') : ''
+      window.location.reload()
     })()
     return () => { alive = false }
   }, [code])

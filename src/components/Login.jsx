@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getRememberedLogin, isSupabaseConfigured, setRememberedLogin, supabase } from '../lib/supabase'
 import Icon from './Icon'
 
@@ -12,6 +12,15 @@ export default function Login({ auth }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState({ type: '', text: '' })
   const [awaitCode, setAwaitCode] = useState('')
+
+  // The server sends failed Google/Apple sign-ins back here as /#/login?error=...
+  useEffect(() => {
+    const m = window.location.hash.match(/^#\/login\?error=(.*)$/)
+    if (m) {
+      try { setMsg({ type: 'err', text: decodeURIComponent(m[1]) }) } catch { /* ignore */ }
+      history.replaceState(null, '', window.location.pathname)
+    }
+  }, [])
 
   const switchMode = (m) => { setMode(m); setConfirm(''); setAwaitCode(''); setMsg({ type: '', text: '' }) }
 
@@ -63,7 +72,7 @@ export default function Login({ auth }) {
     setMsg({ type: '', text: '' })
     try {
       // The server sends a 302 to Google / Apple, so just navigate there directly.
-      window.location.href = `/api/auth/${provider}/start`
+      window.location.href = `${(import.meta.env.VITE_API_BASE || '').replace(/\/+$/, '')}/api/auth/${provider}/start`
     } catch (err) {
       setMsg({ type: 'err', text: err.message || 'Could not start sign-in.' })
     } finally {
@@ -139,7 +148,6 @@ export default function Login({ auth }) {
                 <div className="oauth">
                   <p className="muted" style={{ margin: '4px 0 0', textAlign: 'center', fontSize: '.85rem' }}>Or continue with</p>
                   <button type="button" className="btn oauth-btn block" disabled={busy} onClick={() => startOauth('google')}><Icon name="google" size={18} /> Continue with Google</button>
-                  <button type="button" className="btn oauth-btn block" disabled={busy} onClick={() => startOauth('apple')}><Icon name="apple" size={18} /> Continue with Apple</button>
                 </div>
                 {mode === 'signin' && <button type="button" className="link" onClick={() => switchMode('forgot')}>Forgot password?</button>}
                 <button type="button" className="link" onClick={() => switchMode(mode === 'signup' || mode === 'forgot' ? 'signin' : 'signup')}>

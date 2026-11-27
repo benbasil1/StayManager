@@ -370,3 +370,13 @@ label input:focus, label select:focus, .textarea:focus { border-color: var(--gre
 .oauth-btn { width: 100%; background: #fff; border: 1px solid #dadce0; color: #3c4043; font-weight: 600; margin-bottom: 8px; justify-content: center; gap: 10px; }
 .oauth-btn:hover { background: #f6f8fa; border-color: #c6c9cc; color: #202124; }
 .oauth-btn:disabled { opacity: .7; color: #3c4043; }
+
+/* ---------- Login: Google first, code step ---------- */
+.or-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .8rem; }
+.or-divider::before, .or-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.login-form .oauth-btn { margin-bottom: 0; }
+.pw-wrap { position: relative; display: block; }
+.pw-wrap input { width: 100%; padding-right: 64px; }
+.pw-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 6px 8px; color: var(--green); font-weight: 700; font-size: .85rem; }
+.code-input { text-align: center; font-size: 1.75rem; font-weight: 800; letter-spacing: .5em; padding-left: .5em; }
+.link:disabled { color: var(--muted); cursor: default; }

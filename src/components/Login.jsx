@@ -146,7 +146,7 @@ export default function Login({ auth }) {
                 {msg.text && <div className={'notice ' + msg.type}>{msg.text}</div>}
                 <button className="btn primary block" disabled={busy}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'forgot' ? 'Send reset link' : 'Send code'}</button>
                 <div className="oauth">
-                  <p className="muted" style={{ margin: '4px 0 0', textAlign: 'center', fontSize: '.85rem' }}>Or continue with</p>
+                  <p className="muted" style={{ margin: '14px 0 12px', textAlign: 'center', fontSize: '.85rem' }}>Or continue with</p>
                   <button type="button" className="btn oauth-btn block" disabled={busy} onClick={() => startOauth('google')}><Icon name="google" size={18} /> Continue with Google</button>
                 </div>
                 {mode === 'signin' && <button type="button" className="link" onClick={() => switchMode('forgot')}>Forgot password?</button>}

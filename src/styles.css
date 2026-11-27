@@ -367,5 +367,6 @@ label input:focus, label select:focus, .textarea:focus { border-color: var(--gre
 
 /* Third-party sign-in buttons */
 .oauth { margin-top: 4px; }
-.oauth-btn { width: 100%; background: #fff; border: 1px solid var(--line); color: var(--ink); margin-bottom: 8px; justify-content: center; gap: 8px; }
-.oauth-btn:hover { background: var(--tint); border-color: var(--green); }
+.oauth-btn { width: 100%; background: #fff; border: 1px solid #dadce0; color: #3c4043; font-weight: 600; margin-bottom: 8px; justify-content: center; gap: 10px; }
+.oauth-btn:hover { background: #f6f8fa; border-color: #c6c9cc; color: #202124; }
+.oauth-btn:disabled { opacity: .7; color: #3c4043; }

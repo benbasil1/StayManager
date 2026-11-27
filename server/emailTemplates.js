@@ -116,3 +116,24 @@ export function resetEmail({ env, link, minutes }) {
   const text = `Reset your StayManager password\n\nSomeone asked to reset the password for your account. Open this link to choose a new one (works once, expires in ${minutes} minutes):\n${link}\n\nIf you did not ask for this, ignore this email. Your password stays the same.`
   return { subject: 'Reset your StayManager password', html, text }
 }
+
+// ───────────── attender invitation ─────────────
+export function staffInviteEmail({ env, ownerEmail, propertyName, name, link, days }) {
+  const hello = name ? `Hi ${esc(name)},` : 'Hi,'
+  const html = layout({
+    env,
+    preheader: `${ownerEmail} invited you to help manage ${propertyName}. Confirm your email and set your password.`,
+    heading: `You are invited to ${propertyName}`,
+    reason: 'You are receiving this email because someone entered this address as an attender on StayManager.',
+    bodyHtml:
+      p(hello) +
+      p(`<strong>${esc(ownerEmail)}</strong> has invited you to join <strong>${esc(propertyName)}</strong> on StayManager as an attender (staff).`) +
+      p('With your login you can see tenant complaints and calls, contact tenants with one tap, and update the status of each complaint.') +
+      p('Select the button below to confirm your email address and choose your own password.') +
+      button(link, 'Accept invitation') +
+      small(`The link works once and expires in ${days} days.<br>If the button does not work, copy this link into your browser:<br><a href="${esc(link)}" style="color:${BRAND};word-break:break-all">${esc(link)}</a>`) +
+      small('If you do not know this person or were not expecting this, ignore this email. No account is created unless you accept.'),
+  })
+  const text = `You are invited to ${propertyName} on StayManager\n\n${ownerEmail} has invited you to join ${propertyName} as an attender (staff).\n\nOpen this link to confirm your email and choose your own password (works once, expires in ${days} days):\n${link}\n\nIf you do not know this person or were not expecting this, ignore this email. No account is created unless you accept.`
+  return { subject: `You are invited to ${propertyName} on StayManager`, html, text }
+}

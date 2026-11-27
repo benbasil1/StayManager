@@ -7,6 +7,7 @@
 import { HttpError } from './errors.js'
 import { assistantRoute } from './assistant.js'
 import { authRoute, getUser as verifyLogin, createLogin, findLogin, loginExists, setLoginPassword, deleteLogin } from './auth.js'
+import { inviteRoute, sendStaffInvite, listPendingInvites, invitePropertyId, deleteInvite } from './invites.js'
 
 const CORS = {
   'access-control-allow-origin': '*', // safe: auth uses a Bearer token, never cookies
@@ -868,14 +869,17 @@ async function route({ request, db, user, segments, url, body, env }) {
     if (!b && method === 'GET') {
       const pid = url.searchParams.get('property_id')
       await requireOwner(db, user, pid)
-      return all(db, 'SELECT * FROM property_staff WHERE property_id = ? ORDER BY created_at', [pid])
+      const staff = await all(db, 'SELECT * FROM property_staff WHERE property_id = ? ORDER BY created_at', [pid])
+      return [...staff, ...(await listPendingInvites(db, pid))] // pending invitations show up as "Pending" until the attender accepts
     }
+    // Owner invites an attender by email. Nothing is created yet: the attender opens the emailed link (which verifies the
+    // address), chooses their own password, and is added to the list then. See server/invites.js.
     if (!b && method === 'POST') {
       const s = pick(body, INSERT_COLS.property_staff)
       await requireOwner(db, user, s.property_id)
-      s.id ||= uuid()
       s.email = String(s.email || '').trim().toLowerCase()
       if (!s.email) throw new HttpError(400, 'Email is required')
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.email) || s.email.length > 200) throw new HttpError(400, 'Please enter a valid email address.')
       text(s, 'name', 100, 'Name')
       const haveStaff = Number((await one(db, 'SELECT COUNT(*) AS n FROM property_staff WHERE property_id = ?', [s.property_id])).n)
       if (haveStaff >= 30) throw new HttpError(400, 'You can add up to 30 attenders per PG.')
@@ -883,18 +887,17 @@ async function route({ request, db, user, segments, url, body, env }) {
       if (await one(db, 'SELECT 1 AS ok FROM property_staff WHERE property_id = ? AND lower(email) = ?', [s.property_id, s.email])) {
         throw new HttpError(409, 'This email is already added.', '23505')
       }
-      // The owner creates the attender's login (email + password). An email that already has a login can only be
-      // reused if it is an attender already, so an owner can never take over somebody else's account.
+      // An email that already has a login can only be invited if it is an attender already, so an owner can never
+      // take over (or even invite onto) somebody else's account.
       const existing = await findLogin(db, s.email)
       if (existing) {
         const isOwner = await one(db, 'SELECT 1 AS ok FROM properties WHERE owner_id = ? LIMIT 1', [existing.id])
         const isStaff = await one(db, 'SELECT 1 AS ok FROM property_staff WHERE lower(email) = ? LIMIT 1', [s.email])
         if (isOwner || !isStaff) throw new HttpError(409, 'This email already has an account. Use a different email for the attender.')
-      } else {
-        await createLogin(db, s.email, body?.password)
       }
-      await db.execute(insertStmt('property_staff', s))
-      return one(db, 'SELECT * FROM property_staff WHERE id = ?', [s.id])
+      const property = await one(db, 'SELECT id, name FROM properties WHERE id = ?', [s.property_id])
+      await sendStaffInvite({ db, env, request, ownerId: user.id, ownerEmail: user.email, property, email: s.email, name: s.name || '' })
+      return { invited: true, email: s.email }
     }
     // owner sets a new password for an attender
     if (b && method === 'PATCH') {
@@ -907,6 +910,15 @@ async function route({ request, db, user, segments, url, body, env }) {
       )
       if (elsewhere) throw new HttpError(409, 'This attender also works for another owner, so only they can change this password.')
       await setLoginPassword(db, st.email, body?.password)
+      return { ok: true }
+    }
+    if (b && method === 'DELETE' && b.startsWith('inv-')) {
+      // cancel an invitation that has not been accepted yet
+      const pid = await invitePropertyId(db, b.slice(4))
+      if (pid) {
+        await requireOwner(db, user, pid)
+        await deleteInvite(db, b.slice(4))
+      }
       return { ok: true }
     }
     if (b && method === 'DELETE') {
@@ -1014,6 +1026,7 @@ export async function handle({ request, db, env = {}, getUser }) {
     }
     if (segments[0] === 'voice') return json(await voiceRoute({ request, db, env, segments, body }))
     if (segments[0] === 'report') return json(await reportRoute({ request, db, segments, body }))
+    if (segments[0] === 'auth' && segments[1] === 'invite') return json(await inviteRoute({ request, db, env, segments, body }))
     if (segments[0] === 'auth') {
       const out = await authRoute({ request, db, env, segments, body })
       // Google/Apple start + callback return a 302 Response; pass it through instead of wrapping it as JSON

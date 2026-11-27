@@ -135,6 +135,20 @@ const auth = {
     const { error } = await post('reset', { token, password })
     return { error: error || null }
   },
+  // Attender invitation page: look the invitation up, then accept it (new attenders choose their own password).
+  async inviteInfo(token) {
+    const { payload, error } = await post('invite/info', { token })
+    return { data: payload || null, error: error || null }
+  },
+  async acceptInvite({ token, password, remember = true }) {
+    const { payload, error } = await post('invite/accept', { token, password })
+    if (error) return { data: null, error }
+    if (payload.access_token) {
+      write(payload, remember)
+      emit('SIGNED_IN', payload)
+    }
+    return { data: payload, error: null }
+  },
   // Last step of Google / Apple sign-in: trade the single-use code for a session.
   async exchangeOauthCode(code, remember = true) {
     const { payload, error } = await post('oauth/exchange', { code })

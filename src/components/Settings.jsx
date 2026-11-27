@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { isSupabaseConfigured } from '../lib/supabase'
+import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import { usePrefs, setPref } from '../lib/prefs'
 import QRCode from 'qrcode'
-import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, resetStaffPassword, sendFeedback, setPropertyPhones } from '../lib/api'
+import { addStaff, getReportCode, loadStaff, removeStaff, resetReportCode, sendFeedback, setPropertyPhones } from '../lib/api'
 import { posterHtml } from '../lib/poster'
 import { useData } from '../lib/store'
 import { alertsPref, browserAlertsSupported, setAlertsPref } from '../lib/notify'
@@ -365,7 +365,6 @@ function StaffManager() {
   const [list, setList] = useState([])
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
-  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState({ type: '', text: '' })
 
@@ -387,29 +386,37 @@ function StaffManager() {
   async function add(e) {
     e.preventDefault()
     const em = email.trim().toLowerCase()
-    if (!em.includes('@') || password.length < 8 || busy) return
+    if (!em.includes('@') || busy) return
     setBusy(true)
     setMsg({ type: '', text: '' })
     try {
-      await addStaff({ property_id: pid, email: em, name: name.trim(), password })
-      setEmail(''); setName(''); setPassword('')
+      await addStaff({ property_id: pid, email: em, name: name.trim() })
+      setEmail(''); setName('')
       await refresh()
-      setMsg({ type: 'ok', text: 'Attender created. Give them this email and password: they sign in on the normal login screen.' })
+      setMsg({ type: 'ok', text: `Invitation sent to ${em}. They will appear in the list as soon as they verify their email and create their password.` })
     } catch (err) {
-      setMsg({ type: 'err', text: err.code === '23505' ? 'This email is already added.' : err.message || 'Could not add' })
+      setMsg({ type: 'err', text: err.code === '23505' ? 'This email is already added.' : err.message || 'Could not send the invitation' })
     } finally {
       setBusy(false)
     }
   }
 
-  async function resetPw(s) {
-    const pw = window.prompt(`New password for ${s.name || s.email} (at least 8 characters)`)
-    if (!pw) return
-    try { await resetStaffPassword(s.id, pw); setMsg({ type: 'ok', text: 'Password changed. Tell the attender the new password.' }) } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not change the password' }) }
+  async function resend(s) {
+    setMsg({ type: '', text: '' })
+    try {
+      await addStaff({ property_id: pid, email: s.email, name: s.name || '' })
+      setMsg({ type: 'ok', text: `Invitation sent again to ${s.email}.` })
+    } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not send the invitation' }) }
+  }
+
+  // Attenders choose their own password, so "new password" now emails them a reset link instead of the owner typing one.
+  async function sendReset(s) {
+    const { error } = await supabase.auth.resetPasswordForEmail(s.email)
+    setMsg(error ? { type: 'err', text: error.message || 'Could not send the reset link' } : { type: 'ok', text: `A password reset link was emailed to ${s.email}.` })
   }
 
   async function remove(s) {
-    if (!window.confirm(`Remove ${s.name || s.email}? They will lose access.`)) return
+    if (!window.confirm(s.pending ? `Cancel the invitation to ${s.email}?` : `Remove ${s.name || s.email}? They will lose access.`)) return
     try { await removeStaff(s.id); await refresh() } catch (err) { setMsg({ type: 'err', text: err.message || 'Could not remove' }) }
   }
 
@@ -417,15 +424,17 @@ function StaffManager() {
     <>
       <SectionHead
         title="Attenders (staff)"
-        info={<p className="muted">Attenders get their own login and see only the Complaints and Calls tabs for {property ? property.name : 'this PG'}, with Call and WhatsApp buttons. No rent, payments or ID proofs. They can change a complaint's status and you see it right away.</p>}
+        info={<p className="muted">You invite an attender by email. They verify their email, choose their own password, and then get their own login. They see only the Complaints and Calls tabs for {property ? property.name : 'this PG'}, with Call and WhatsApp buttons. No rent, payments or ID proofs. They can change a complaint's status and you see it right away.</p>}
       />
       <div className="list-plain">
         {list.map((s) => (
           <div key={s.id} className="set-row pg-row">
             <div><strong>{s.name || s.email}</strong>{s.name && <p className="muted">{s.email}</p>}</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button type="button" className="btn ghost sm" onClick={() => resetPw(s)}>New password</button>
-              <button type="button" className="icon-btn danger" aria-label={`Remove ${s.email}`} onClick={() => remove(s)}><Icon name="trash" size={16} /></button>
+              {s.pending
+                ? <><span className="tag">Pending</span><button type="button" className="btn ghost sm" onClick={() => resend(s)}>Resend</button></>
+                : <button type="button" className="btn ghost sm" onClick={() => sendReset(s)}>Send reset link</button>}
+              <button type="button" className="icon-btn danger" aria-label={`${s.pending ? 'Cancel invitation for' : 'Remove'} ${s.email}`} onClick={() => remove(s)}><Icon name="trash" size={16} /></button>
             </div>
           </div>
         ))}
@@ -434,9 +443,9 @@ function StaffManager() {
       <form className="login-form" style={{ marginTop: 0 }} onSubmit={add}>
         <label>Attender name (optional)<input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Raju" /></label>
         <label>Attender email (their login)<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="attender@gmail.com" autoComplete="off" /></label>
-        <label>Password (at least 8 characters)<input type="text" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Choose a password for them" autoComplete="off" /></label>
+        <p className="muted" style={{ margin: 0 }}>We email them a link to verify their email and choose their own password. They are added to the list once they do.</p>
         {msg.text && <div className={'notice ' + msg.type} style={{ marginBottom: 0 }}>{msg.text}</div>}
-        <button className="btn primary" disabled={busy || !email.includes('@') || password.length < 8}><Icon name="plus" size={18} /> {busy ? 'Creating…' : 'Create attender login'}</button>
+        <button className="btn primary" disabled={busy || !email.includes('@')}><Icon name="plus" size={18} /> {busy ? 'Sending…' : 'Send invitation'}</button>
       </form>
     </>
   )

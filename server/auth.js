@@ -708,3 +708,6 @@ export async function deleteLogin(db, email) {
   await ensureTables(db)
   await db.execute({ sql: 'DELETE FROM users WHERE email = ?', args: [cleanEmail(email)] })
 }
+
+// Shared with server/invites.js
+export { sendMail, mailReady, siteBase, session, sha256, b64u }

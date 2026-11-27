@@ -9,6 +9,35 @@ import { alertsPref, browserAlertsSupported, setAlertsPref } from '../lib/notify
 import Icon from './Icon'
 import { SectionHead } from './InfoTip'
 
+// Button that locks for a while after it is used, with the countdown shown inside it.
+// The unlock time is kept in localStorage, so refreshing the page does not bypass it.
+function CooldownButton({ id, secs = 60, onSend, children }) {
+  const key = 'sm_cd_' + id
+  const readLeft = () => {
+    try { return Math.max(0, Math.ceil((Number(localStorage.getItem(key)) - Date.now()) / 1000)) } catch { return 0 }
+  }
+  const [left, setLeft] = useState(readLeft)
+  useEffect(() => {
+    if (left <= 0) return
+    const t = setTimeout(() => setLeft(readLeft()), 1000)
+    return () => clearTimeout(t)
+  }, [left]) // eslint-disable-line react-hooks/exhaustive-deps
+  const click = () => {
+    if (left > 0) return
+    try { localStorage.setItem(key, String(Date.now() + secs * 1000)) } catch { /* ignore */ }
+    setLeft(secs)
+    onSend()
+  }
+  const locked = left > 0
+  return (
+    <button type="button" className={'btn ghost sm cd-btn' + (locked ? ' locked' : '')} onClick={click} aria-disabled={locked}
+      aria-label={locked ? `${children}. Available again in ${left} seconds` : undefined}>
+      {locked && <span className="cd-fill" style={{ width: `${(left / secs) * 100}%` }} />}
+      <span className="cd-label">{locked ? <><Icon name="check" size={14} /> Sent · {left}s</> : children}</span>
+    </button>
+  )
+}
+
 const THEMES = [['light', 'Light'], ['dark', 'Dark'], ['auto', 'Auto']]
 const SIZES = [['sm', 'Small'], ['md', 'Default'], ['lg', 'Large'], ['xl', 'Extra large']]
 
@@ -432,8 +461,8 @@ function StaffManager() {
             <div><strong>{s.name || s.email}</strong>{s.name && <p className="muted">{s.email}</p>}</div>
             <div style={{ display: 'flex', gap: 8 }}>
               {s.pending
-                ? <><span className="tag">Pending</span><button type="button" className="btn ghost sm" onClick={() => resend(s)}>Resend</button></>
-                : <button type="button" className="btn ghost sm" onClick={() => sendReset(s)}>Send reset link</button>}
+                ? <><span className="tag">Pending</span><CooldownButton id={`invite_${s.id}`} onSend={() => resend(s)}>Resend</CooldownButton></>
+                : <CooldownButton id={`reset_${s.id}`} onSend={() => sendReset(s)}>Send reset link</CooldownButton>}
               <button type="button" className="icon-btn danger" aria-label={`${s.pending ? 'Cancel invitation for' : 'Remove'} ${s.email}`} onClick={() => remove(s)}><Icon name="trash" size={16} /></button>
             </div>
           </div>

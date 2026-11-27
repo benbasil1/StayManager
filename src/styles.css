@@ -380,3 +380,9 @@ label input:focus, label select:focus, .textarea:focus { border-color: var(--gre
 .pw-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 6px 8px; color: var(--green); font-weight: 700; font-size: .85rem; }
 .code-input { text-align: center; font-size: 1.75rem; font-weight: 800; letter-spacing: .5em; padding-left: .5em; }
 .link:disabled { color: var(--muted); cursor: default; }
+
+/* Cooldown button: label stays put, a soft bar drains while it is locked */
+.cd-btn { position: relative; overflow: hidden; min-width: 132px; }
+.cd-btn .cd-label { position: relative; display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.cd-btn .cd-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green); opacity: .22; transition: width 1s linear; }
+.cd-btn.locked { cursor: default; color: var(--muted); }

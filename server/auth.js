@@ -3,9 +3,11 @@
 // Sessions: a signed token (HMAC-SHA256) valid for 30 days, sent as "Authorization: Bearer <token>".
 // Needs Cloudflare secrets: AUTH_SECRET (long random string), plus for email:
 //   BREVO_API_KEY or RESEND_API_KEY, and MAIL_FROM.
+// Optional email polish: MAIL_FROM_NAME (default "StayManager"), MAIL_REPLY_TO (your Gmail: replies land there), SUPPORT_EMAIL.
 // Optional for Google/Apple sign-in:
 //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY
 import { HttpError } from './errors.js'
+import { welcomeEmail, codeEmail, resetEmail } from './emailTemplates.js'
 
 const ITERATIONS = 100000
 const SESSION_DAYS = 30
@@ -157,20 +159,47 @@ const sha256 = async (text) => b64u.enc(await crypto.subtle.digest('SHA-256', en
 // ───────────── email ─────────────
 // Sends through Brevo or Resend (whichever key is set). Secrets: BREVO_API_KEY or RESEND_API_KEY, and MAIL_FROM.
 const mailReady = (env) => !!((env.BREVO_API_KEY || env.RESEND_API_KEY) && env.MAIL_FROM)
-async function sendMail(env, to, subject, html) {
+async function sendMail(env, to, subject, html, text) {
   const from = String(env.MAIL_FROM).trim()
+  const name = String(env.MAIL_FROM_NAME || 'StayManager').trim()
+  const replyTo = String(env.MAIL_REPLY_TO || '').trim()
   const res = env.BREVO_API_KEY
     ? await fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({ sender: { name: 'StayManager', email: from }, to: [{ email: to }], subject, htmlContent: html }),
+        body: JSON.stringify({
+          sender: { name, email: from },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          ...(text ? { textContent: text } : {}),
+          ...(replyTo ? { replyTo: { email: replyTo, name } } : {}),
+        }),
       })
     : await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ from: `StayManager <${from}>`, to: [to], subject, html }),
+        body: JSON.stringify({
+          from: `${name} <${from}>`,
+          to: [to],
+          subject,
+          html,
+          ...(text ? { text } : {}),
+          ...(replyTo ? { reply_to: replyTo } : {}),
+        }),
       })
   if (!res.ok) throw new Error(`Email provider said ${res.status}: ${(await res.text()).slice(0, 200)}`)
+}
+
+// Welcome email after an account is created. Never blocks or breaks signup: a failure is only logged.
+async function sendWelcome(env, to, base) {
+  if (!mailReady(env)) return
+  try {
+    const m = welcomeEmail({ env, appUrl: base })
+    await sendMail(env, to, m.subject, m.html, m.text)
+  } catch (e) {
+    console.error('Welcome email failed:', e?.message || e)
+  }
 }
 
 // 6 random digits, without the modulo bias a plain % 1000000 would introduce.
@@ -181,12 +210,6 @@ function sixDigits() {
     if (buf[0] < 4294000000) return String(buf[0] % 1000000).padStart(6, '0')
   }
 }
-
-const codeHtml = (code, why) =>
-  `<p>Hi,</p><p>${why}</p>` +
-  `<p style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f1f5f0;padding:14px 0;text-align:center;border-radius:12px">${code}</p>` +
-  `<p style="color:#666;font-size:13px">This code expires in ${CODE_MINUTES} minutes and can be used once. ` +
-  `StayManager will never ask you for this code by phone or WhatsApp. If you did not ask for it, ignore this email.</p>`
 
 // Emails a code and stores only its hash. Limits how many one address/network can request per hour.
 async function issueCode(db, env, email, purpose, passwordHash = null, why = '') {
@@ -220,7 +243,8 @@ async function issueCode(db, env, email, purpose, passwordHash = null, why = '')
     ],
     'write'
   )
-  await sendMail(env, email, `${code} is your StayManager code`, codeHtml(code, why))
+  const m = codeEmail({ env, code, why, minutes: CODE_MINUTES })
+  await sendMail(env, email, m.subject, m.html, m.text)
 }
 
 // Checks a typed code, burning it on success. Returns the row (so callers can read password_hash).
@@ -288,7 +312,7 @@ async function verifyIdToken(token, jwksUrl, audience, issuers) {
 }
 
 // Finds the StayManager user behind a provider account, creating or linking one as needed.
-async function userForOauth(db, provider, subject, email, emailVerified) {
+async function userForOauth(db, provider, subject, email, emailVerified, onCreated) {
   const linked = await rowOf(db, 'SELECT user_id FROM oauth_accounts WHERE provider = ? AND subject = ?', [provider, subject])
   if (linked) {
     const u = await rowOf(db, 'SELECT id, email FROM users WHERE id = ?', [linked.user_id])
@@ -319,6 +343,7 @@ async function userForOauth(db, provider, subject, email, emailVerified) {
     ],
     'write'
   )
+  if (onCreated) await onCreated(user)
   return user
 }
 
@@ -445,7 +470,7 @@ export async function authRoute({ request, db, env, segments, body }) {
         'accounts.google.com',
         'https://accounts.google.com',
       ])
-      const user = await userForOauth(db, 'google', claims.sub, claims.email, claims.email_verified !== false && claims.email_verified !== 'false')
+      const user = await userForOauth(db, 'google', claims.sub, claims.email, claims.email_verified !== false && claims.email_verified !== 'false', (u) => sendWelcome(env, u.email, base))
       return redirect(await handoff(db, request, env, user))
     }
 
@@ -464,7 +489,7 @@ export async function authRoute({ request, db, env, segments, body }) {
       const claims = await verifyIdToken(String(form.get('id_token') || ''), 'https://appleid.apple.com/auth/keys', env.APPLE_CLIENT_ID, [
         'https://appleid.apple.com',
       ])
-      const user = await userForOauth(db, 'apple', claims.sub, claims.email, claims.email_verified === true || claims.email_verified === 'true')
+      const user = await userForOauth(db, 'apple', claims.sub, claims.email, claims.email_verified === true || claims.email_verified === 'true', (u) => sendWelcome(env, u.email, base))
       return redirect(await handoff(db, request, env, user))
     }
 
@@ -526,6 +551,7 @@ export async function authRoute({ request, db, env, segments, body }) {
       ],
       'write'
     )
+    await sendWelcome(env, user.email, siteBase(request, env))
     return session(user, env)
   }
 
@@ -584,14 +610,8 @@ export async function authRoute({ request, db, env, segments, body }) {
       const base = siteBase(request, env)
       const link = `${base}/#/reset/${token}`
       try {
-        await sendMail(
-          env,
-          u.email,
-          'Reset your StayManager password',
-          `<p>Hi,</p><p>Someone asked to reset the password for your StayManager account. Tap the button below to choose a new one. The link works once and expires in ${RESET_MINUTES} minutes.</p>` +
-            `<p><a href="${link}" style="background:#1f8a4c;color:#fff;padding:12px 22px;border-radius:999px;text-decoration:none;font-weight:700">Choose a new password</a></p>` +
-            `<p style="color:#666;font-size:13px">Or open this link: ${link}<br>If you did not ask for this, ignore this email. Your password stays the same.</p>`
-        )
+        const m = resetEmail({ env, link, minutes: RESET_MINUTES })
+        await sendMail(env, u.email, m.subject, m.html, m.text)
       } catch (e) {
         console.error('Reset email failed:', e?.message || e)
       }
